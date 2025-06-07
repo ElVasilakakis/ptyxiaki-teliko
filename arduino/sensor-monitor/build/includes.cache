@@ -1,0 +1,132 @@
+[
+  {
+    "Sourcefile": null,
+    "Include": "",
+    "Includepath": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\cores\\esp32"
+  },
+  {
+    "Sourcefile": null,
+    "Include": "",
+    "Includepath": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\variants\\doitESP32devkitV1"
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\build\\sketch\\sensor-monitor.ino.cpp",
+    "Include": "WiFi.h",
+    "Includepath": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\WiFi\\src"
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\build\\sketch\\sensor-monitor.ino.cpp",
+    "Include": "Network.h",
+    "Includepath": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\Network\\src"
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\build\\sketch\\sensor-monitor.ino.cpp",
+    "Include": "MQTT.h",
+    "Includepath": "C:\\Users\\tsigk\\Documents\\Arduino\\libraries\\MQTT\\src"
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\build\\sketch\\sensor-monitor.ino.cpp",
+    "Include": "ArduinoJson.h",
+    "Includepath": "C:\\Users\\tsigk\\Documents\\Arduino\\libraries\\ArduinoJson\\src"
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\build\\sketch\\sensor-monitor.ino.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\WiFi\\src\\AP.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\WiFi\\src\\STA.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\WiFi\\src\\WiFi.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\WiFi\\src\\WiFiAP.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\WiFi\\src\\WiFiGeneric.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\WiFi\\src\\WiFiMulti.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\WiFi\\src\\WiFiSTA.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\WiFi\\src\\WiFiScan.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\Network\\src\\NetworkClient.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\Network\\src\\NetworkEvents.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\Network\\src\\NetworkInterface.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\Network\\src\\NetworkManager.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\Network\\src\\NetworkServer.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\Network\\src\\NetworkUdp.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Documents\\Arduino\\libraries\\MQTT\\src\\MQTTClient.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Documents\\Arduino\\libraries\\MQTT\\src\\lwmqtt\\client.c",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Documents\\Arduino\\libraries\\MQTT\\src\\lwmqtt\\helpers.c",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Documents\\Arduino\\libraries\\MQTT\\src\\lwmqtt\\packet.c",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Documents\\Arduino\\libraries\\MQTT\\src\\lwmqtt\\string.c",
+    "Include": "",
+    "Includepath": null
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "..\\..",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "build.warn_data_percentage=75",
+  "fqbn": "esp32:esp32:esp32doit-devkit-v1",
+  "hardwareFolders": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages",
+  "otherLibrariesFolders": "C:\\Users\\tsigk\\Documents\\Arduino\\libraries",
+  "sketchLocation": "C:\\Users\\tsigk\\Desktop\\Apps\\Laravel\\ptyxiaki Inertia\\arduino\\sensor-monitor"
+}

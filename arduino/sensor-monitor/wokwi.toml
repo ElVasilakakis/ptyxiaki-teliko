@@ -1,0 +1,9 @@
+[wokwi]
+version = 1
+firmware = 'build/sensor-monitor.ino.bin'
+elf = 'build/sensor-monitor.ino.elf'
+
+# Use default Wokwi port forwarding (requires Private Gateway)
+[[net.forward]]
+from = "localhost:8180"
+to = "target:80"
