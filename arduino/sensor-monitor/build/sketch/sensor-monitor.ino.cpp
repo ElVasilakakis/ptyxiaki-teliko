@@ -32,13 +32,13 @@ void connect();
 void messageReceived(String &topic, String &payload);
 #line 76 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void publishDeviceDiscovery();
-#line 116 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 151 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void setup();
-#line 139 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 178 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void loop();
-#line 161 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 200 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void publishSensorData();
-#line 185 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 224 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void publishDeviceStatus();
 #line 27 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void connect() {
@@ -97,12 +97,16 @@ void publishDeviceDiscovery() {
     doc["device_id"] = device_id;
     doc["device_name"] = device_name;
     doc["device_type"] = "SENSOR_MONITOR";
-    // ... device details
+    doc["firmware_version"] = "1.0.1";
+    doc["mac_address"] = WiFi.macAddress();
+    doc["ip_address"] = WiFi.localIP().toString();
+    doc["uptime"] = millis() / 1000;
+    doc["free_heap"] = ESP.getFreeHeap();
+    doc["wifi_rssi"] = WiFi.RSSI();
     
-    // Available sensors - THIS IS WHERE SENSOR DATA IS SENT
+    // Available sensors
     JsonArray sensors = doc.createNestedArray("available_sensors");
     
-    // Temperature sensor definition
     JsonObject tempSensor = sensors.createNestedObject();
     tempSensor["sensor_type"] = "temperature";
     tempSensor["sensor_name"] = "DHT22 Temperature";
@@ -113,22 +117,53 @@ void publishDeviceDiscovery() {
     tempSensor["thresholds"]["min"] = -10;
     tempSensor["thresholds"]["max"] = 50;
     
-    // Humidity sensor definition
     JsonObject humSensor = sensors.createNestedObject();
     humSensor["sensor_type"] = "humidity";
-    // ... humidity sensor details
+    humSensor["sensor_name"] = "DHT22 Humidity";
+    humSensor["unit"] = "percent";
+    humSensor["description"] = "Digital humidity sensor";
+    humSensor["location"] = "main_board";
+    humSensor["accuracy"] = 2.0;
+    humSensor["thresholds"]["min"] = 0;
+    humSensor["thresholds"]["max"] = 100;
     
-    // Light sensor definition
     JsonObject lightSensor = sensors.createNestedObject();
     lightSensor["sensor_type"] = "light";
-    // ... light sensor details
+    lightSensor["sensor_name"] = "LDR Light Sensor";
+    lightSensor["unit"] = "percent";
+    lightSensor["description"] = "Analog light sensor";
+    lightSensor["location"] = "main_board";
+    lightSensor["accuracy"] = 5.0;
+    lightSensor["thresholds"]["min"] = 0;
+    lightSensor["thresholds"]["max"] = 100;
     
-    // WiFi signal sensor definition
     JsonObject wifiSensor = sensors.createNestedObject();
     wifiSensor["sensor_type"] = "wifi_signal";
-    // ... wifi sensor details
+    wifiSensor["sensor_name"] = "WiFi Signal Strength";
+    wifiSensor["unit"] = "dBm";
+    wifiSensor["description"] = "WiFi signal strength indicator";
+    wifiSensor["location"] = "internal";
+    wifiSensor["accuracy"] = 1.0;
+    wifiSensor["thresholds"]["min"] = -100;
+    wifiSensor["thresholds"]["max"] = -30;
+    
+    // Device capabilities
+    JsonArray capabilities = doc.createNestedArray("capabilities");
+    capabilities.add("remote_control");
+    capabilities.add("real_time_monitoring");
+    capabilities.add("configuration_update");
+    capabilities.add("status_reporting");
+    
+    String jsonString;
+    serializeJson(doc, jsonString);
+    
+    String discoveryTopic = "devices/" + device_id + "/discovery/response";
+    client.publish(discoveryTopic, jsonString);
+    
+    Serial.println("Published device discovery response:");
+    Serial.println("Topic: " + discoveryTopic);
+    Serial.println("Data: " + jsonString);
 }
-
 
 void setup() {
     Serial.begin(115200);
@@ -151,6 +186,10 @@ void setup() {
     
     Serial.println("=== Setup Complete ===");
     digitalWrite(2, HIGH);
+    
+    // Auto-publish discovery on startup
+    delay(2000); // Wait for connection to stabilize
+    publishDeviceDiscovery();
 }
 
 void loop() {
@@ -185,7 +224,7 @@ void publishSensorData() {
     JsonObject sensors = doc.createNestedObject("sensors");
     sensors["temperature"] = temperature;
     sensors["humidity"] = humidity;
-    sensors["light_level"] = map(lightLevel, 0, 4095, 0, 100);
+    sensors["light"] = map(lightLevel, 0, 4095, 0, 100);  // Fixed: changed from light_level to light
     sensors["wifi_signal"] = WiFi.RSSI();
     
     String jsonString;
