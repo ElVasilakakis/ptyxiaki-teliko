@@ -126,6 +126,12 @@ return [
         'emergency' => [
             'path' => storage_path('logs/laravel.log'),
         ],
+        
+        'mqtt' => [
+            'driver' => 'single',
+            'path' => storage_path('logs/mqtt.log'),
+            'level' => env('LOG_LEVEL', 'debug'),
+        ],
 
     ],
 
