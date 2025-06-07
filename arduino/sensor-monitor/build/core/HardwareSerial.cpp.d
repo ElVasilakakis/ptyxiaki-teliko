@@ -1,4 +1,4 @@
-C:\Users\tsigk\Desktop\Ptyxiaki\filament-project\arduino\sensor-monitor\build\core\HardwareSerial.cpp.o: \
+C:\Users\tsigk\Desktop\Ptyxiaki\ptyxiaki-final\ptyxiaki-final\arduino\sensor-monitor\build\core\HardwareSerial.cpp.o: \
  C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\cores\esp32\HardwareSerial.cpp \
  C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\variants\doitESP32devkitV1/pins_arduino.h \
  C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\cores\esp32\io_pin_remap.h \

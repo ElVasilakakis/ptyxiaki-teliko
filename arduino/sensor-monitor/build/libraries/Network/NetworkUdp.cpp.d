@@ -1,4 +1,4 @@
-C:\Users\tsigk\Desktop\Ptyxiaki\filament-project\arduino\sensor-monitor\build\libraries\Network\NetworkUdp.cpp.o: \
+C:\Users\tsigk\Desktop\Ptyxiaki\ptyxiaki-final\ptyxiaki-final\arduino\sensor-monitor\build\libraries\Network\NetworkUdp.cpp.o: \
  C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\libraries\Network\src\NetworkUdp.cpp \
  C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\libraries\Network\src\NetworkUdp.h \
  C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\cores\esp32/Arduino.h \

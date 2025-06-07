@@ -186,7 +186,16 @@ class DeviceResource extends Resource
                     ->icon('heroicon-o-magnifying-glass')
                     ->action(function (Device $record) {
                         try {
-                            $service = new MqttDeviceService();
+                            // Store current user in session/cache for MQTT service
+                            cache()->put("mqtt_user_context", auth()->id(), now()->addMinutes(5));
+                            
+                            // Log the discovery attempt
+                            \Illuminate\Support\Facades\Log::channel('mqtt')->info("Manual device discovery initiated", [
+                                'device_id' => $record->device_unique_id,
+                                'user_id' => auth()->id(),
+                                'from_filament' => true
+                            ]);
+                            
                             $mqtt = \PhpMqtt\Client\Facades\MQTT::connection();
                             $mqtt->publish("devices/{$record->device_unique_id}/discover", 'discover');
                             
@@ -196,6 +205,11 @@ class DeviceResource extends Resource
                                 ->success()
                                 ->send();
                         } catch (\Exception $e) {
+                            \Illuminate\Support\Facades\Log::channel('mqtt')->error("Manual device discovery failed", [
+                                'device_id' => $record->device_unique_id,
+                                'error' => $e->getMessage()
+                            ]);
+                            
                             Notification::make()
                                 ->title('Discovery failed')
                                 ->body('Error: ' . $e->getMessage())
@@ -203,6 +217,7 @@ class DeviceResource extends Resource
                                 ->send();
                         }
                     }),
+
                 Tables\Actions\Action::make('send_command')
                     ->label('Send Command')
                     ->icon('heroicon-o-command-line')
@@ -253,6 +268,11 @@ class DeviceResource extends Resource
                             // Store current user context
                             cache()->put("mqtt_user_context", auth()->id(), now()->addMinutes(5));
                             
+                            \Illuminate\Support\Facades\Log::channel('mqtt')->info("Global device discovery initiated", [
+                                'user_id' => auth()->id(),
+                                'from_filament' => true
+                            ]);
+                            
                             $service = new MqttDeviceService();
                             $service->discoverAllDevices();
                             
@@ -262,6 +282,11 @@ class DeviceResource extends Resource
                                 ->success()
                                 ->send();
                         } catch (\Exception $e) {
+                            \Illuminate\Support\Facades\Log::channel('mqtt')->error("Global device discovery failed", [
+                                'error' => $e->getMessage(),
+                                'trace' => $e->getTraceAsString()
+                            ]);
+                            
                             Notification::make()
                                 ->title('Discovery failed')
                                 ->body('Error: ' . $e->getMessage())

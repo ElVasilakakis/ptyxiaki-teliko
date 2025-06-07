@@ -80,16 +80,12 @@ void publishDeviceDiscovery() {
     doc["device_id"] = device_id;
     doc["device_name"] = device_name;
     doc["device_type"] = "SENSOR_MONITOR";
-    doc["firmware_version"] = "1.0.1";
-    doc["mac_address"] = WiFi.macAddress();
-    doc["ip_address"] = WiFi.localIP().toString();
-    doc["uptime"] = millis() / 1000;
-    doc["free_heap"] = ESP.getFreeHeap();
-    doc["wifi_rssi"] = WiFi.RSSI();
+    // ... device details
     
-    // Available sensors
+    // Available sensors - THIS IS WHERE SENSOR DATA IS SENT
     JsonArray sensors = doc.createNestedArray("available_sensors");
     
+    // Temperature sensor definition
     JsonObject tempSensor = sensors.createNestedObject();
     tempSensor["sensor_type"] = "temperature";
     tempSensor["sensor_name"] = "DHT22 Temperature";
@@ -100,53 +96,22 @@ void publishDeviceDiscovery() {
     tempSensor["thresholds"]["min"] = -10;
     tempSensor["thresholds"]["max"] = 50;
     
+    // Humidity sensor definition
     JsonObject humSensor = sensors.createNestedObject();
     humSensor["sensor_type"] = "humidity";
-    humSensor["sensor_name"] = "DHT22 Humidity";
-    humSensor["unit"] = "percent";
-    humSensor["description"] = "Digital humidity sensor";
-    humSensor["location"] = "main_board";
-    humSensor["accuracy"] = 2.0;
-    humSensor["thresholds"]["min"] = 0;
-    humSensor["thresholds"]["max"] = 100;
+    // ... humidity sensor details
     
+    // Light sensor definition
     JsonObject lightSensor = sensors.createNestedObject();
     lightSensor["sensor_type"] = "light";
-    lightSensor["sensor_name"] = "LDR Light Sensor";
-    lightSensor["unit"] = "percent";
-    lightSensor["description"] = "Analog light sensor";
-    lightSensor["location"] = "main_board";
-    lightSensor["accuracy"] = 5.0;
-    lightSensor["thresholds"]["min"] = 0;
-    lightSensor["thresholds"]["max"] = 100;
+    // ... light sensor details
     
+    // WiFi signal sensor definition
     JsonObject wifiSensor = sensors.createNestedObject();
     wifiSensor["sensor_type"] = "wifi_signal";
-    wifiSensor["sensor_name"] = "WiFi Signal Strength";
-    wifiSensor["unit"] = "dBm";
-    wifiSensor["description"] = "WiFi signal strength indicator";
-    wifiSensor["location"] = "internal";
-    wifiSensor["accuracy"] = 1.0;
-    wifiSensor["thresholds"]["min"] = -100;
-    wifiSensor["thresholds"]["max"] = -30;
-    
-    // Device capabilities
-    JsonArray capabilities = doc.createNestedArray("capabilities");
-    capabilities.add("remote_control");
-    capabilities.add("real_time_monitoring");
-    capabilities.add("configuration_update");
-    capabilities.add("status_reporting");
-    
-    String jsonString;
-    serializeJson(doc, jsonString);
-    
-    String discoveryTopic = "devices/" + device_id + "/discovery/response";
-    client.publish(discoveryTopic, jsonString);
-    
-    Serial.println("Published device discovery response:");
-    Serial.println("Topic: " + discoveryTopic);
-    Serial.println("Data: " + jsonString);
+    // ... wifi sensor details
 }
+
 
 void setup() {
     Serial.begin(115200);

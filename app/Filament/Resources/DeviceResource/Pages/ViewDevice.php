@@ -190,26 +190,64 @@ class ViewDevice extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
-            Actions\Action::make('refresh_data')
-                ->label('Refresh Device Data')
-                ->icon('heroicon-o-arrow-path')
+            Actions\Action::make('discover_device')
+                ->label('Discover Device')
+                ->icon('heroicon-o-magnifying-glass')
+                ->color('success')
                 ->action(function () {
                     try {
+                        $deviceId = $this->record->device_unique_id;
                         $service = new \App\Services\MqttDeviceService();
+                        
+                        // Create a more detailed discovery payload
+                        $payload = [
+                            'action' => 'discover',
+                            'timestamp' => time(),
+                            'initiated_by' => auth()->user()?->email ?? 'admin_panel',
+                            'request_id' => uniqid('disc_', true)
+                        ];
+                        
+                        // Store current user context for discovery
+                        \Illuminate\Support\Facades\Cache::put(
+                            "mqtt_user_context", 
+                            auth()->id() ?? 1, 
+                            now()->addMinutes(5)
+                        );
+                        
+                        // Log the discovery request
+                        \Illuminate\Support\Facades\Log::channel('mqtt')->info("Device discovery requested from admin panel", [
+                            'device_id' => $deviceId,
+                            'device_name' => $this->record->name,
+                            'user_id' => auth()->id(),
+                            'user_email' => auth()->user()?->email,
+                            'payload' => $payload
+                        ]);
+                        
+                        // Send the discovery request
                         $mqtt = \PhpMqtt\Client\Facades\MQTT::connection();
-                        $mqtt->publish("devices/{$this->record->device_unique_id}/discover", 'discover');
+                        $mqtt->publish(
+                            "devices/{$deviceId}/discover", 
+                            json_encode($payload)
+                        );
                         
                         \Filament\Notifications\Notification::make()
-                            ->title('Refresh request sent')
-                            ->body('Device data refresh requested')
+                            ->title('Discovery request sent')
+                            ->body("Device discovery request sent to {$this->record->name}")
                             ->success()
                             ->send();
                     } catch (\Exception $e) {
                         \Filament\Notifications\Notification::make()
-                            ->title('Refresh failed')
+                            ->title('Discovery failed')
                             ->body('Error: ' . $e->getMessage())
                             ->danger()
                             ->send();
+                            
+                        \Illuminate\Support\Facades\Log::channel('mqtt')->error("Device discovery failed from admin panel", [
+                            'device_id' => $this->record->device_unique_id,
+                            'device_name' => $this->record->name,
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString()
+                        ]);
                     }
                 }),
             Actions\Action::make('send_command')

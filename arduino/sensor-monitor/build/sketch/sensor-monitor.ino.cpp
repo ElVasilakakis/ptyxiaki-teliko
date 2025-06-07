@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#line 1 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 1 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 #include <WiFi.h>
 #include <MQTT.h>
 #include <ArduinoJson.h>
@@ -26,19 +26,21 @@ int temperature;
 int humidity;
 int lightLevel;
 
-#line 27 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 27 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void connect();
-#line 48 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 49 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void messageReceived(String &topic, String &payload);
-#line 63 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 76 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
+void publishDeviceDiscovery();
+#line 116 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void setup();
-#line 86 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 139 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void loop();
-#line 108 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 161 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void publishSensorData();
-#line 132 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 185 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void publishDeviceStatus();
-#line 27 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\filament-project\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 27 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void connect() {
     Serial.print("checking wifi...");
     while (WiFi.status() != WL_CONNECTED) {
@@ -47,7 +49,6 @@ void connect() {
     }
 
     Serial.print("\nconnecting to MQTT...");
-    // Connect with username and password
     while (!client.connect(device_id.c_str(), mqtt_username, mqtt_password)) {
         Serial.print(".");
         delay(1000);
@@ -58,6 +59,8 @@ void connect() {
     // Subscribe to device control topics
     client.subscribe("devices/" + device_id + "/control/#");
     client.subscribe("devices/" + device_id + "/config/#");
+    client.subscribe("devices/" + device_id + "/discover");  // Device-specific discovery
+    client.subscribe("devices/discover/all");                // Global discovery
 }
 
 void messageReceived(String &topic, String &payload) {
@@ -73,7 +76,59 @@ void messageReceived(String &topic, String &payload) {
     if(topic == "devices/" + device_id + "/config/interval") {
         Serial.println("Config update: " + payload);
     }
+    
+    // Handle device discovery request
+    if(topic == "devices/" + device_id + "/discover") {
+        Serial.println("Discovery request received");
+        publishDeviceDiscovery();
+    }
+    
+    // Handle global discovery request
+    if(topic == "devices/discover/all") {
+        Serial.println("Global discovery request received");
+        publishDeviceDiscovery();
+    }
 }
+
+void publishDeviceDiscovery() {
+    DynamicJsonDocument doc(1024);
+    
+    // Device information
+    doc["device_id"] = device_id;
+    doc["device_name"] = device_name;
+    doc["device_type"] = "SENSOR_MONITOR";
+    // ... device details
+    
+    // Available sensors - THIS IS WHERE SENSOR DATA IS SENT
+    JsonArray sensors = doc.createNestedArray("available_sensors");
+    
+    // Temperature sensor definition
+    JsonObject tempSensor = sensors.createNestedObject();
+    tempSensor["sensor_type"] = "temperature";
+    tempSensor["sensor_name"] = "DHT22 Temperature";
+    tempSensor["unit"] = "celsius";
+    tempSensor["description"] = "Digital temperature sensor";
+    tempSensor["location"] = "main_board";
+    tempSensor["accuracy"] = 0.5;
+    tempSensor["thresholds"]["min"] = -10;
+    tempSensor["thresholds"]["max"] = 50;
+    
+    // Humidity sensor definition
+    JsonObject humSensor = sensors.createNestedObject();
+    humSensor["sensor_type"] = "humidity";
+    // ... humidity sensor details
+    
+    // Light sensor definition
+    JsonObject lightSensor = sensors.createNestedObject();
+    lightSensor["sensor_type"] = "light";
+    // ... light sensor details
+    
+    // WiFi signal sensor definition
+    JsonObject wifiSensor = sensors.createNestedObject();
+    wifiSensor["sensor_type"] = "wifi_signal";
+    // ... wifi sensor details
+}
+
 
 void setup() {
     Serial.begin(115200);
