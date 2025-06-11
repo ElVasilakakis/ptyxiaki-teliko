@@ -526,37 +526,95 @@ class MqttDeviceService
                     $sensorLog['has_thresholds'] = false;
                 }
                 
-                // Prepare sensor data
+                // CRITICAL FIX: Separate search criteria from update attributes
+                $searchCriteria = [
+                    'device_id' => $device->id,
+                    'sensor_type' => $sensorType
+                ];
+                
+                // Prepare sensor data WITHOUT search criteria fields
                 $sensorAttributes = [
                     'sensor_name' => $sensorData['sensor_name'] ?? "Sensor {$sensorType}",
-                    'description' => $sensorData['description'] ?? null,
-                    'location' => $sensorData['location'] ?? null,
-                    'unit' => $sensorData['unit'] ?? null,
-                    'accuracy' => $sensorData['accuracy'] ?? null,
+                    'description' => $sensorData['description'] ?? "Auto-discovered {$sensorType} sensor",
+                    'location' => $sensorData['location'] ?? 'main_board',
+                    'unit' => $sensorData['unit'] ?? $this->getDefaultUnit($sensorType),
+                    'accuracy' => $sensorData['accuracy'] ?? 1.0,
                     'thresholds' => $thresholds,
-                    'enabled' => true,
+                    'value' => null, // Initialize with null
+                    'reading_timestamp' => now(),
+                    'enabled' => $sensorData['enabled'] ?? true,
+                    'calibration_offset' => 0.0,
+                    'last_calibration' => now(),
                     'alert_enabled' => true,
                     'alert_threshold_min' => $minThreshold,
                     'alert_threshold_max' => $maxThreshold,
-                    'last_calibration' => now(),
                 ];
                 
-                // Create or update the sensor
-                $sensor = Sensor::updateOrCreate(
-                    [
+                // Log what we're about to create/update
+                Log::channel('mqtt')->debug("Sensor creation attempt", [
+                    'device_id' => $device->id,
+                    'search_criteria' => $searchCriteria,
+                    'attributes' => $sensorAttributes,
+                    'sensor_type' => $sensorType
+                ]);
+                
+                // Check if sensor already exists
+                $existingSensor = Sensor::where('device_id', $device->id)
+                                    ->where('sensor_type', $sensorType)
+                                    ->first();
+                
+                if ($existingSensor) {
+                    Log::channel('mqtt')->info("Updating existing sensor", [
+                        'sensor_id' => $existingSensor->id,
                         'device_id' => $device->id,
                         'sensor_type' => $sensorType
-                    ],
-                    $sensorAttributes
-                );
+                    ]);
+                    
+                    $existingSensor->update($sensorAttributes);
+                    $sensor = $existingSensor;
+                    $wasRecentlyCreated = false;
+                } else {
+                    Log::channel('mqtt')->info("Creating new sensor", [
+                        'device_id' => $device->id,
+                        'sensor_type' => $sensorType
+                    ]);
+                    
+                    // Merge search criteria with attributes for creation
+                    $createAttributes = array_merge($searchCriteria, $sensorAttributes);
+                    $sensor = Sensor::create($createAttributes);
+                    $wasRecentlyCreated = true;
+                }
+                
+                // Verify the sensor was actually saved
+                if (!$sensor || !$sensor->exists) {
+                    throw new \Exception("Sensor was not saved to database");
+                }
+                
+                // Refresh the sensor to get latest data
+                $sensor->refresh();
                 
                 // Update results
-                if ($sensor->wasRecentlyCreated) {
+                if ($wasRecentlyCreated) {
                     $results['created']++;
                     $sensorLog['status'] = 'created';
+                    Log::channel('mqtt')->info("NEW sensor created successfully", [
+                        'sensor_id' => $sensor->id,
+                        'device_id' => $device->id,
+                        'sensor_type' => $sensorType,
+                        'sensor_name' => $sensor->sensor_name,
+                        'created_at' => $sensor->created_at,
+                        'updated_at' => $sensor->updated_at
+                    ]);
                 } else {
                     $results['updated']++;
                     $sensorLog['status'] = 'updated';
+                    Log::channel('mqtt')->info("Existing sensor updated successfully", [
+                        'sensor_id' => $sensor->id,
+                        'device_id' => $device->id,
+                        'sensor_type' => $sensorType,
+                        'sensor_name' => $sensor->sensor_name,
+                        'updated_at' => $sensor->updated_at
+                    ]);
                 }
                 
                 $sensorLog['sensor_id'] = $sensor->id;
@@ -571,16 +629,33 @@ class MqttDeviceService
                 $sensorLog['processing_time_ms'] = round((microtime(true) - $sensorStartTime) * 1000, 2);
                 
                 Log::channel('mqtt')->error("Failed to create/update sensor", [
+                    'device_id' => $device->id,
                     'sensor_type' => $sensorData['sensor_type'] ?? 'unknown',
+                    'mapped_type' => $sensorType,
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
-                    'sensor_data' => $sensorData
+                    'sensor_data' => $sensorData,
+                    'search_criteria' => $searchCriteria ?? null,
+                    'attributes_attempted' => $sensorAttributes ?? null
+                ]);
+                
+                // Additional debugging
+                Log::channel('mqtt')->debug("Database debugging info", [
+                    'device_exists' => $device->exists,
+                    'device_id' => $device->id,
+                    'fillable_fields' => (new Sensor())->getFillable(),
+                    'sensor_table_exists' => \Schema::hasTable('sensors'),
+                    'device_sensors_count' => $device->sensors()->count(),
+                    'total_sensors_count' => Sensor::count()
                 ]);
             }
         }
         
         // Calculate processing time
         $totalTime = round((microtime(true) - $startTime) * 1000, 2);
+        
+        // Final verification - count actual sensors in database
+        $actualSensorCount = $device->sensors()->count();
         
         Log::channel('mqtt')->info("Completed sensor sync for device", [
             'device_id' => $device->id,
@@ -589,6 +664,7 @@ class MqttDeviceService
             'created' => $results['created'],
             'updated' => $results['updated'],
             'failed' => $results['failed'],
+            'actual_db_sensor_count' => $actualSensorCount,
             'processing_time_ms' => $totalTime,
             'sensor_types' => array_unique($results['sensor_types'])
         ]);
@@ -596,7 +672,18 @@ class MqttDeviceService
         return $results;
     }
 
-    
+
+    private function getDefaultUnit(string $sensorType): ?string
+    {
+        return match($sensorType) {
+            'temperature' => 'celsius',
+            'humidity' => 'percent',
+            'light' => 'percent',
+            'wifi_signal' => 'dBm',
+            'battery' => 'percent',
+            default => null
+        };
+    }
     private function updateSensorReadings(Device $device, array $sensorsData, int $timestamp)
     {
         $startTime = microtime(true);
