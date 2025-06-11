@@ -23,11 +23,30 @@ class MqttDeviceService
         try {
             $mqtt = MQTT::connection();
             
-            // Subscribe to device topics
-            $mqtt->subscribe('devices/+/discovery/response', [$this, 'handleDeviceDiscovery'], $this->qos);
-            $mqtt->subscribe('devices/+/data', [$this, 'handleDeviceData'], $this->qos);
-            $mqtt->subscribe('devices/+/status', [$this, 'handleDeviceStatus'], $this->qos);
-            $mqtt->subscribe('devices/discover/all', [$this, 'handleGlobalDiscovery'], $this->qos);
+            // Subscribe to device topics with correct parameter order: topic, callback, qos
+            $mqtt->subscribe(
+                'devices/+/discovery/response', 
+                \Closure::fromCallable([$this, 'handleDeviceDiscovery']),  // callback second
+                $this->qos  // qos third
+            );
+            
+            $mqtt->subscribe(
+                'devices/+/data', 
+                \Closure::fromCallable([$this, 'handleDeviceData']),
+                $this->qos
+            );
+            
+            $mqtt->subscribe(
+                'devices/+/status', 
+                \Closure::fromCallable([$this, 'handleDeviceStatus']),
+                $this->qos
+            );
+            
+            $mqtt->subscribe(
+                'devices/discover/all', 
+                \Closure::fromCallable([$this, 'handleGlobalDiscovery']),
+                $this->qos
+            );
             
             Log::info('MQTT subscriber started successfully');
             $mqtt->loop(true);
@@ -37,6 +56,8 @@ class MqttDeviceService
             throw $e;
         }
     }
+
+
     
     public function handleDeviceDiscovery(string $topic, string $message)
     {
@@ -922,17 +943,65 @@ class MqttDeviceService
             $userId = auth()->id() ?? \App\Models\User::first()?->id ?? 1;
             cache()->put("mqtt_user_context", $userId, now()->addMinutes(5));
             
-            Log::channel('mqtt')->info("Stored user context for discovery", [
+            Log::channel('mqtt')->info("=== STARTING GLOBAL DEVICE DISCOVERY ===", [
                 'user_id' => $userId,
-                'cache_key' => 'mqtt_user_context',
-                'expiration' => now()->addMinutes(5)->toIso8601String(),
-                'initiated_by' => auth()->user()?->email ?? 'system'
+                'initiated_by' => auth()->user()?->email ?? 'system',
+                'timestamp' => now()->toISOString()
             ]);
             
-            // Connect to MQTT broker
+            // Use a fresh connection for discovery
             $mqtt = MQTT::connection();
             
-            // Send discovery request with timestamp
+            // Connect with retry logic (REMOVED PING CALLS)
+            $connectionTimeout = 15;
+            $connectionStart = time();
+            $connected = false;
+            
+            while (!$connected && (time() - $connectionStart) < $connectionTimeout) {
+                try {
+                    $mqtt->connect();
+                    $connected = $mqtt->isConnected();
+                    
+                    if (!$connected) {
+                        Log::channel('mqtt')->warning("Connection attempt failed, retrying...");
+                        sleep(1);
+                    }
+                } catch (\Exception $e) {
+                    Log::channel('mqtt')->warning("Connection error: " . $e->getMessage());
+                    sleep(2);
+                }
+            }
+            
+            if (!$connected) {
+                throw new \Exception("Failed to establish MQTT connection within {$connectionTimeout} seconds");
+            }
+            
+            Log::channel('mqtt')->info("✅ MQTT connection established");
+            
+            // Subscribe to discovery responses BEFORE sending the request
+            $responseReceived = false;
+            $discoveryResponses = [];
+            
+            $mqtt->subscribe('devices/+/discovery/response', function ($topic, $message) use (&$responseReceived, &$discoveryResponses) {
+                Log::channel('mqtt')->info("📨 Received discovery response", [
+                    'topic' => $topic,
+                    'message_preview' => substr($message, 0, 200) . '...'
+                ]);
+                
+                $responseReceived = true;
+                $discoveryResponses[] = [
+                    'topic' => $topic,
+                    'message' => $message,
+                    'received_at' => now()->toISOString()
+                ];
+                
+                // Process the response immediately
+                $this->handleDeviceDiscovery($topic, $message);
+            }, 1);
+            
+            Log::channel('mqtt')->info("📡 Subscribed to discovery responses");
+            
+            // Prepare and send discovery request
             $discoveryPayload = json_encode([
                 'action' => 'discover',
                 'timestamp' => time(),
@@ -940,34 +1009,78 @@ class MqttDeviceService
                 'request_id' => uniqid('disc_', true)
             ]);
             
-            $mqtt->publish('devices/discover/all', $discoveryPayload, $this->qos);
-            
-            // Log the discovery request
-            Log::channel('mqtt')->info("Global device discovery request sent", [
+            Log::channel('mqtt')->info("📤 Publishing global discovery request", [
                 'topic' => 'devices/discover/all',
-                'payload' => $discoveryPayload,
-                'qos' => $this->qos,
-                'timestamp' => now()->toIso8601String(),
-                'processing_time_ms' => round((microtime(true) - $startTime) * 1000, 2)
+                'payload' => $discoveryPayload
             ]);
             
-            return true;
-        } catch (\Exception $e) {
-            // Log detailed error information
-            Log::channel('mqtt')->error("Error sending discovery request: " . $e->getMessage(), [
-                'exception' => $e->getMessage(),
-                'exception_class' => get_class($e),
-                'trace' => $e->getTraceAsString(),
+            // CRITICAL FIX: Check the return value properly
+            $published = $mqtt->publish('devices/discover/all', $discoveryPayload, 0);
+            
+            // The publish method might return void, so we check connection instead
+            if (!$mqtt->isConnected()) {
+                throw new \Exception("MQTT connection lost during publish");
+            }
+            
+            Log::channel('mqtt')->info("✅ Discovery request published successfully");
+            
+            // Wait for responses with timeout
+            $waitTimeout = 10; // Wait 10 seconds for responses
+            $waitStart = time();
+            $loopCount = 0;
+            
+            Log::channel('mqtt')->info("⏳ Waiting for discovery responses...");
+            
+            while ((time() - $waitStart) < $waitTimeout) {
+                // Process incoming messages
+                $mqtt->loop(false, true); // Non-blocking
+                
+                $loopCount++;
+                
+                // Log progress every 2 seconds
+                if ($loopCount % 20 === 0) {
+                    $elapsed = time() - $waitStart;
+                    $remaining = $waitTimeout - $elapsed;
+                    Log::channel('mqtt')->info("⏱️ Waiting for responses... {$elapsed}s elapsed, {$remaining}s remaining");
+                }
+                
+                usleep(100000); // 100ms delay
+            }
+            
+            // Disconnect
+            $mqtt->disconnect();
+            
+            $totalResponses = count($discoveryResponses);
+            
+            Log::channel('mqtt')->info("=== DISCOVERY COMPLETED ===", [
+                'responses_received' => $totalResponses,
                 'processing_time_ms' => round((microtime(true) - $startTime) * 1000, 2),
-                'mqtt_config' => [
-                    'host' => env('MQTT_HOST'),
-                    'port' => env('MQTT_PORT'),
-                    'client_id' => env('MQTT_CLIENT_ID'),
-                    'qos' => $this->qos
-                ]
+                'responses' => $discoveryResponses
+            ]);
+            
+            if ($totalResponses === 0) {
+                Log::channel('mqtt')->warning("⚠️ No discovery responses received. Check if Arduino devices are online and subscribed to 'devices/discover/all'");
+            }
+            
+            return [
+                'success' => true,
+                'responses_received' => $totalResponses,
+                'processing_time_ms' => round((microtime(true) - $startTime) * 1000, 2)
+            ];
+            
+        } catch (\Exception $e) {
+            Log::channel('mqtt')->error("=== DISCOVERY FAILED ===", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'processing_time_ms' => round((microtime(true) - $startTime) * 1000, 2)
             ]);
             
             throw $e;
         }
     }
+
+
+
+
+
 }
