@@ -23,6 +23,11 @@ class DeviceResource extends Resource
     protected static ?string $navigationGroup = 'Farm Management';
     protected static ?int $navigationSort = 2;
 
+    protected function getPollingInterval(): ?string
+    {
+        return '10s';
+    }
+
     public static function form(Form $form): Form
     {
         return $form
@@ -103,6 +108,7 @@ class DeviceResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->poll('10s')
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->searchable()

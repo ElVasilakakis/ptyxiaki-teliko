@@ -1,547 +1,398 @@
 #include <WiFi.h>
 #include <MQTT.h>
 #include <ArduinoJson.h>
+#include <DHT.h>
+#include <LiquidCrystal_I2C.h>
+
+// DHT22 Configuration
+#define DHTPIN 15
+#define DHTTYPE DHT22
+DHT dht(DHTPIN, DHTTYPE);
+
+// LCD Configuration
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// Pin Definitions
+#define PHOTORESISTOR_PIN 32
+#define POTENTIOMETER_PIN 34
+#define GREEN_LED_PIN 2
+#define BLUE_LED_PIN 4
 
 const char ssid[] = "Wokwi-GUEST";
 const char pass[] = "";
 
-// MQTT Configuration with your credentials
+// MQTT Configuration
 const char* mqtt_broker = "broker.emqx.io";
 const int mqtt_port = 1883;
-const char* mqtt_username = "mqttuser";     // Your username
-const char* mqtt_password = "12345678";     // Your password
+const char* mqtt_username = "mqttuser";
+const char* mqtt_password = "12345678";
 
 WiFiClient net;
-MQTTClient client(8192);  // Large buffer for discovery messages
+MQTTClient client(4096); 
 unsigned long lastMillis = 0;
-unsigned long lastReconnectAttempt = 0;
-unsigned long lastHeartbeat = 0;
-const unsigned long reconnectInterval = 5000; // 5 seconds
-const unsigned long heartbeatInterval = 30000; // 30 seconds
+unsigned long lastDiscovery = 0;
+unsigned long lastLcdUpdate = 0;
 
 // Device Configuration
 const String device_id = "ESP32-DEV-001";
 const String device_name = "Environmental Sensor Monitor";
+const String firmware_version = "1.2.0";
+const String device_type = "ESP32_ENVIRONMENTAL";
 
 // Sensor variables
-int temperature;
-int humidity;
-int lightLevel;
+float temperature = 0.0;
+float humidity = 0.0;
+int lightLevel = 0;
+int potValue = 0;
+int wifiSignal = 0;
+float batteryLevel = 100.0; // Simulated battery
 
-// Status tracking
-bool mqttConnected = false;
-bool wifiConnected = false;
-int discoveryCount = 0;
+// Calibration offsets
+float tempOffset = 0.0;
+float humOffset = 0.0;
+
+// Function Declarations
+void connect();
+void messageReceived(String &topic, String &payload);
+void publishDeviceDiscovery();
+void readSensors();
+void publishSensorData();
+void publishDeviceStatus(String status = "online");
+void publishControlResponse(String control, String value);
+void handleCalibrationUpdate(String payload);
+void handleSensorConfig(String payload);
+void updateLCD();
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
     
-    Serial.println();
-    Serial.println("==========================================");
-    Serial.println("    ESP32 MQTT Device Starting");
-    Serial.println("==========================================");
+    Serial.println("=== ESP32 MQTT Environmental Monitor ===");
     Serial.println("Device ID: " + device_id);
-    Serial.println("Device Name: " + device_name);
-    Serial.println("MQTT Broker: " + String(mqtt_broker) + ":" + String(mqtt_port));
-    Serial.println("Buffer Size: 8192 bytes");
-    Serial.println("==========================================");
+    Serial.println("Firmware: " + firmware_version);
+    Serial.println("========================================");
     
     // Initialize pins
-    pinMode(2, OUTPUT);
-    digitalWrite(2, LOW);  // LED off during setup
+    pinMode(GREEN_LED_PIN, OUTPUT);
+    pinMode(BLUE_LED_PIN, OUTPUT);
+    digitalWrite(GREEN_LED_PIN, LOW);
+    digitalWrite(BLUE_LED_PIN, LOW);
     
-    // Connect to WiFi
-    connectToWiFi();
+    // Initialize DHT22 sensor
+    dht.begin();
     
-    // Setup MQTT client with broker and port
+    // Initialize LCD
+    lcd.init();
+    lcd.backlight();
+    lcd.setCursor(0, 0);
+    lcd.print("Initializing...");
+    
+    // Configure ADC
+    analogReadResolution(12);
+    analogSetAttenuation(ADC_11db);
+    
+    WiFi.begin(ssid, pass);
+    
     client.begin(mqtt_broker, mqtt_port, net);
     client.onMessage(messageReceived);
+    client.setKeepAlive(60);
+    client.setCleanSession(true);
     
-    // Connect to MQTT
-    connectToMQTT();
+    connect();
     
     Serial.println("=== Setup Complete ===");
-    digitalWrite(2, HIGH);  // LED on when ready
+    digitalWrite(GREEN_LED_PIN, HIGH);
     
-    // Auto-publish discovery on startup
-    delay(3000); // Wait for connection to stabilize
-    if (mqttConnected) {
-        Serial.println("=== Publishing startup discovery ===");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("System Ready");
+    delay(2000);
+}
+
+void loop() {
+    client.loop();
+    delay(10);
+    
+    if (!client.connected()) {
+        Serial.println("MQTT disconnected, reconnecting...");
+        connect();
+    }
+    
+    // Publish data every 10 seconds
+    if (millis() - lastMillis > 10000) {
+        lastMillis = millis();
+        readSensors();
+        publishSensorData();
+        publishDeviceStatus(); 
+    }
+    
+    // Update LCD every 2 seconds
+    if (millis() - lastLcdUpdate > 2000) {
+        lastLcdUpdate = millis();
+        updateLCD();
+    }
+    
+    // Auto-republish discovery every 5 minutes
+    if (millis() - lastDiscovery > 300000) {
+        lastDiscovery = millis();
         publishDeviceDiscovery();
     }
 }
 
-void connectToWiFi() {
-    Serial.println("Connecting to WiFi...");
-    WiFi.begin(ssid, pass);
-    
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-        delay(500);
-        Serial.print(".");
-        attempts++;
-    }
-    
-    if (WiFi.status() == WL_CONNECTED) {
-        wifiConnected = true;
-        Serial.println();
-        Serial.println("✅ WiFi connected successfully!");
-        Serial.println("IP address: " + WiFi.localIP().toString());
-        Serial.println("MAC address: " + WiFi.macAddress());
-        Serial.println("Signal strength: " + String(WiFi.RSSI()) + " dBm");
-    } else {
-        wifiConnected = false;
-        Serial.println();
-        Serial.println("❌ WiFi connection failed!");
-    }
-}
-
-void connectToMQTT() {
-    if (!wifiConnected) {
-        Serial.println("Cannot connect to MQTT: WiFi not connected");
-        return;
-    }
-    
-    Serial.println("Connecting to MQTT broker...");
-    
-    // Create unique client ID to avoid conflicts
-    String clientId = device_id + "_device_" + String(millis());
-    
-    int attempts = 0;
-    while (!client.connect(clientId.c_str(), mqtt_username, mqtt_password) && attempts < 10) {
+void connect() {
+    Serial.print("Checking WiFi...");
+    while (WiFi.status() != WL_CONNECTED) {
         Serial.print(".");
         delay(1000);
-        attempts++;
     }
+
+    Serial.print("\nConnecting to MQTT...");
+    while (!client.connect(device_id.c_str(), mqtt_username, mqtt_password)) {
+        Serial.print(".");
+        delay(1000);
+    }
+
+    Serial.println("\nMQTT Connected!");
+
+    // Subscribe to topics
+    client.subscribe("devices/" + device_id + "/control/#");
+    client.subscribe("devices/" + device_id + "/config/#");
+    client.subscribe("devices/" + device_id + "/discover");
+    client.subscribe("devices/discover/all");
     
-    if (client.connected()) {
-        mqttConnected = true;
-        Serial.println();
-        Serial.println("✅ MQTT connected successfully!");
-        Serial.println("Client ID: " + clientId);
-        
-        // Subscribe to topics with confirmation
-        Serial.println("Subscribing to control topics...");
-        
-        if (client.subscribe("devices/" + device_id + "/control/#")) {
-            Serial.println("✅ Subscribed to: devices/" + device_id + "/control/#");
-        } else {
-            Serial.println("❌ Failed to subscribe to control topics");
-        }
-        
-        if (client.subscribe("devices/" + device_id + "/config/#")) {
-            Serial.println("✅ Subscribed to: devices/" + device_id + "/config/#");
-        } else {
-            Serial.println("❌ Failed to subscribe to config topics");
-        }
-        
-        if (client.subscribe("devices/" + device_id + "/discover")) {
-            Serial.println("✅ Subscribed to: devices/" + device_id + "/discover");
-        } else {
-            Serial.println("❌ Failed to subscribe to discovery topic");
-        }
-        
-        if (client.subscribe("devices/discover/all")) {
-            Serial.println("✅ Subscribed to: devices/discover/all");
-        } else {
-            Serial.println("❌ Failed to subscribe to global discovery");
-        }
-        
-        // Publish online status immediately after connection
-        publishDeviceStatus();
-        
-        // Send will message setup
-        Serial.println("MQTT connection established with will message");
-        
-    } else {
-        mqttConnected = false;
-        Serial.println();
-        Serial.println("❌ MQTT connection failed!");
-    }
+    publishDeviceStatus("online");
+    
+    readSensors();
+    delay(1000);
+    publishDeviceDiscovery();
 }
 
 void messageReceived(String &topic, String &payload) {
-    Serial.println();
-    Serial.println("=== MQTT MESSAGE RECEIVED ===");
-    Serial.println("Timestamp: " + String(millis()));
-    Serial.println("Topic: " + topic);
-    Serial.println("Payload: " + payload);
-    Serial.println("Payload Length: " + String(payload.length()));
-    Serial.println("Free Heap: " + String(ESP.getFreeHeap()));
-    Serial.println("=============================");
+    Serial.println("Received: " + topic + " - " + payload);
     
-    // Handle LED control
-    if(topic == "devices/" + device_id + "/control/led") {
-        int ledState = payload.toInt();
-        digitalWrite(2, ledState);
-        Serial.println("💡 LED set to: " + String(ledState));
-        
-        // Send acknowledgment
-        String ackTopic = "devices/" + device_id + "/control/led/ack";
-        String ackPayload = "{\"command\":\"led\",\"value\":" + String(ledState) + ",\"status\":\"success\",\"timestamp\":" + String(millis()) + "}";
-        client.publish(ackTopic, ackPayload, false, 1); // QoS 1 for acknowledgments
+    if(topic == "devices/" + device_id + "/control/green_led") {
+        digitalWrite(GREEN_LED_PIN, payload.toInt());
+        publishControlResponse("green_led", payload.toInt() ? "on" : "off");
     }
     
-    // Handle device configuration
-    if(topic == "devices/" + device_id + "/config/interval") {
-        Serial.println("⚙️ Config update received: " + payload);
-        // Add configuration handling logic here
+    if(topic == "devices/" + device_id + "/control/blue_led") {
+        digitalWrite(BLUE_LED_PIN, payload.toInt());
+        publishControlResponse("blue_led", payload.toInt() ? "on" : "off");
     }
     
-    // Handle device discovery request (device-specific)
-    if(topic == "devices/" + device_id + "/discover") {
-        Serial.println("🔍 DEVICE-SPECIFIC DISCOVERY REQUEST RECEIVED");
-        Serial.println("Request payload: " + payload);
-        Serial.println("Triggering discovery response...");
+    if(topic == "devices/" + device_id + "/config/calibration") {
+        handleCalibrationUpdate(payload);
+    }
+    
+    if(topic == "devices/" + device_id + "/discover" || topic == "devices/discover/all") {
+        Serial.println("Discovery request received");
+        readSensors();
         publishDeviceDiscovery();
     }
     
-    // Handle global discovery request
-    if(topic == "devices/discover/all") {
-        Serial.println("🌐 GLOBAL DISCOVERY REQUEST RECEIVED");
-        Serial.println("Request payload: " + payload);
-        Serial.println("Triggering discovery response...");
-        
-        // Add random delay to prevent message collision
-        int delayMs = random(100, 1000);
-        Serial.println("Adding random delay: " + String(delayMs) + "ms");
-        delay(delayMs);
-        
-        publishDeviceDiscovery();
+    if(topic == "devices/" + device_id + "/config/sensors") {
+        handleSensorConfig(payload);
+    }
+}
+
+void readSensors() {
+    // Read DHT22 sensor
+    humidity = dht.readHumidity();
+    temperature = dht.readTemperature();
+    
+    // Check if DHT22 readings are valid
+    if (isnan(humidity) || isnan(temperature)) {
+        Serial.println("Failed to read from DHT22 sensor!");
+        // Keep previous values or set to error values
+        if (isnan(humidity)) humidity = -1;
+        if (isnan(temperature)) temperature = -999;
     }
     
-    Serial.println("=== Message processing complete ===");
-    Serial.println();
+    // Read photoresistor (light sensor)
+    int rawLight = analogRead(PHOTORESISTOR_PIN);
+    lightLevel = map(rawLight, 0, 4095, 0, 100);
+    
+    // Read potentiometer
+    int rawPot = analogRead(POTENTIOMETER_PIN);
+    potValue = map(rawPot, 0, 4095, 0, 100);
+    
+    // Read WiFi signal strength
+    wifiSignal = WiFi.RSSI();
+    
+    // Simulate battery drain and recharge
+    batteryLevel = max(10.0, batteryLevel - 0.01);
+    if (batteryLevel <= 10.0) batteryLevel = 100.0;
+    
+    // Apply calibration offsets
+    temperature += tempOffset;
+    humidity += humOffset;
+    
+    // Print sensor readings to Serial Monitor
+    Serial.println("=== Sensor Readings ===");
+    Serial.println("Temperature: " + String(temperature) + "°C");
+    Serial.println("Humidity: " + String(humidity) + "%");
+    Serial.println("Light Level: " + String(lightLevel) + "%");
+    Serial.println("Potentiometer: " + String(potValue) + "%");
+    Serial.println("WiFi Signal: " + String(wifiSignal) + " dBm");
+    Serial.println("========================");
+}
+
+void updateLCD() {
+    lcd.clear();
+    
+    // First line: Temperature and Humidity
+    lcd.setCursor(0, 0);
+    if (temperature != -999 && humidity != -1) {
+        lcd.print("T:" + String(temperature, 1) + "C H:" + String(humidity, 1) + "%");
+    } else {
+        lcd.print("DHT22 Error!");
+    }
+    
+    // Second line: Light and Potentiometer
+    lcd.setCursor(0, 1);
+    lcd.print("L:" + String(lightLevel) + "% P:" + String(potValue) + "%");
 }
 
 void publishDeviceDiscovery() {
-    discoveryCount++;
-    Serial.println();
-    Serial.println("🚀 === STARTING DEVICE DISCOVERY RESPONSE #" + String(discoveryCount) + " ===");
+    DynamicJsonDocument doc(4096);
     
-    // Create JSON document with sufficient size
-    DynamicJsonDocument doc(8192);
-    
-    // Device information
+    // Device Information
     doc["device_id"] = device_id;
     doc["device_name"] = device_name;
-    doc["device_type"] = "SENSOR_MONITOR";
-    doc["firmware_version"] = "1.0.3";
+    doc["device_type"] = device_type;
+    doc["firmware_version"] = firmware_version;
     doc["mac_address"] = WiFi.macAddress();
     doc["ip_address"] = WiFi.localIP().toString();
-    doc["uptime"] = millis() / 1000;
-    doc["free_heap"] = ESP.getFreeHeap();
-    doc["wifi_rssi"] = WiFi.RSSI();
-    doc["discovery_timestamp"] = millis();
-    doc["discovery_count"] = discoveryCount;
     
-    Serial.println("📋 Device Info:");
-    Serial.println("  - Device ID: " + String(device_id));
-    Serial.println("  - Device Name: " + String(device_name));
-    Serial.println("  - IP: " + WiFi.localIP().toString());
-    Serial.println("  - MAC: " + WiFi.macAddress());
-    Serial.println("  - Free Heap: " + String(ESP.getFreeHeap()) + " bytes");
-    Serial.println("  - WiFi RSSI: " + String(WiFi.RSSI()) + " dBm");
-    Serial.println("  - Discovery Count: " + String(discoveryCount));
-    
-    // Available sensors array - using proper nested object creation
+    // Sensor Array
     JsonArray sensors = doc.createNestedArray("available_sensors");
     
-    // Temperature sensor
+    // Temperature Sensor
     JsonObject tempSensor = sensors.createNestedObject();
     tempSensor["sensor_type"] = "temperature";
     tempSensor["sensor_name"] = "DHT22 Temperature";
     tempSensor["unit"] = "celsius";
-    tempSensor["description"] = "Digital temperature sensor";
-    tempSensor["location"] = "main_board";
-    tempSensor["accuracy"] = 0.5;
-    tempSensor["enabled"] = true;
-    JsonObject tempThresholds = tempSensor.createNestedObject("thresholds");
-    tempThresholds["min"] = -10;
-    tempThresholds["max"] = 50;
-    
-    // Humidity sensor
+    tempSensor["value"] = round(temperature * 10) / 10.0;
+
+    // Humidity Sensor
     JsonObject humSensor = sensors.createNestedObject();
     humSensor["sensor_type"] = "humidity";
     humSensor["sensor_name"] = "DHT22 Humidity";
     humSensor["unit"] = "percent";
-    humSensor["description"] = "Digital humidity sensor";
-    humSensor["location"] = "main_board";
-    humSensor["accuracy"] = 2.0;
-    humSensor["enabled"] = true;
-    JsonObject humThresholds = humSensor.createNestedObject("thresholds");
-    humThresholds["min"] = 0;
-    humThresholds["max"] = 100;
-    
-    // Light sensor
+    humSensor["value"] = round(humidity * 10) / 10.0;
+
+    // Light Sensor
     JsonObject lightSensor = sensors.createNestedObject();
     lightSensor["sensor_type"] = "light";
-    lightSensor["sensor_name"] = "LDR Light Sensor";
+    lightSensor["sensor_name"] = "Photoresistor Light Level";
     lightSensor["unit"] = "percent";
-    lightSensor["description"] = "Analog light sensor";
-    lightSensor["location"] = "main_board";
-    lightSensor["accuracy"] = 5.0;
-    lightSensor["enabled"] = true;
-    JsonObject lightThresholds = lightSensor.createNestedObject("thresholds");
-    lightThresholds["min"] = 0;
-    lightThresholds["max"] = 100;
+    lightSensor["value"] = lightLevel;
     
-    // WiFi signal sensor
+    // Potentiometer
+    JsonObject potSensor = sensors.createNestedObject();
+    potSensor["sensor_type"] = "potentiometer";
+    potSensor["sensor_name"] = "Potentiometer Value";
+    potSensor["unit"] = "percent";
+    potSensor["value"] = potValue;
+    
+    // WiFi Signal Sensor
     JsonObject wifiSensor = sensors.createNestedObject();
     wifiSensor["sensor_type"] = "wifi_signal";
     wifiSensor["sensor_name"] = "WiFi Signal Strength";
     wifiSensor["unit"] = "dBm";
-    wifiSensor["description"] = "WiFi signal strength indicator";
-    wifiSensor["location"] = "internal";
-    wifiSensor["accuracy"] = 1.0;
-    wifiSensor["enabled"] = true;
-    JsonObject wifiThresholds = wifiSensor.createNestedObject("thresholds");
-    wifiThresholds["min"] = -100;
-    wifiThresholds["max"] = -30;
+    wifiSensor["value"] = wifiSignal;
     
-    Serial.println("📊 Configured Sensors:");
-    Serial.println("  1. Temperature (DHT22) - Range: -10°C to 50°C");
-    Serial.println("  2. Humidity (DHT22) - Range: 0% to 100%");
-    Serial.println("  3. Light Level (LDR) - Range: 0% to 100%");
-    Serial.println("  4. WiFi Signal - Range: -100dBm to -30dBm");
-    
-    // Device capabilities
-    JsonArray capabilities = doc.createNestedArray("capabilities");
-    capabilities.add("remote_control");
-    capabilities.add("real_time_monitoring");
-    capabilities.add("configuration_update");
-    capabilities.add("status_reporting");
-    capabilities.add("led_control");
-    capabilities.add("sensor_reading");
-    
-    // Network information
-    JsonObject networkInfo = doc.createNestedObject("network_info");
-    networkInfo["ssid"] = WiFi.SSID();
-    networkInfo["bssid"] = WiFi.BSSIDstr();
-    networkInfo["channel"] = WiFi.channel();
-    networkInfo["encryption"] = WiFi.encryptionType(0);
-    
-    // Serialize JSON to string
+    // Battery Level Sensor
+    JsonObject batterySensor = sensors.createNestedObject();
+    batterySensor["sensor_type"] = "battery";
+    batterySensor["sensor_name"] = "Battery Level";
+    batterySensor["unit"] = "percent";
+    batterySensor["value"] = round(batteryLevel * 10) / 10.0;
+
     String jsonString;
-    size_t jsonSize = serializeJson(doc, jsonString);
+    serializeJsonPretty(doc, jsonString);
     
-    // Check if serialization was successful
-    if (jsonSize == 0) {
-        Serial.println("❌ ERROR: JSON serialization failed!");
-        Serial.println("Memory status:");
-        Serial.println("  - Free Heap: " + String(ESP.getFreeHeap()));
-        Serial.println("  - Doc Size: " + String(doc.memoryUsage()));
-        return;
-    }
-    
-    Serial.println("📦 Discovery Response Details:");
-    Serial.println("  - JSON Size: " + String(jsonSize) + " bytes");
-    Serial.println("  - Buffer Size: 8192 bytes");
-    Serial.println("  - Available Space: " + String(8192 - jsonSize) + " bytes");
-    Serial.println("  - Memory Usage: " + String(doc.memoryUsage()) + " bytes");
-    
-    // Prepare topic
     String discoveryTopic = "devices/" + device_id + "/discovery/response";
+    client.publish(discoveryTopic, jsonString, false, 0);
     
-    // Publish discovery response with QoS 1 to match Laravel expectations
-    Serial.println("📡 Publishing discovery response...");
-    Serial.println("  - Topic: " + discoveryTopic);
-    Serial.println("  - QoS: 1 (guaranteed delivery)");
-    Serial.println("  - Retained: false");
-    
-    // Use QoS 1 to match Laravel's MQTT service expectations
-    bool published = client.publish(discoveryTopic, jsonString, false, 1);
-    
-    if (published) {
-        Serial.println("✅ Discovery response published successfully!");
-        Serial.println("📤 Complete JSON Response:");
-        Serial.println(jsonString);
-        
-        // Blink LED to indicate successful discovery
-        for(int i = 0; i < 5; i++) {
-            digitalWrite(2, LOW);
-            delay(100);
-            digitalWrite(2, HIGH);
-            delay(100);
-        }
-        
-        // Wait a moment to ensure message is sent
-        delay(100);
-        
-    } else {
-        Serial.println("❌ Failed to publish discovery response!");
-        Serial.println("   Checking connection status...");
-        Serial.println("   - MQTT Connected: " + String(client.connected()));
-        Serial.println("   - WiFi Connected: " + String(WiFi.status() == WL_CONNECTED));
-        Serial.println("   - Free Heap: " + String(ESP.getFreeHeap()));
-        
-        // Attempt to reconnect if needed
-        if (!client.connected()) {
-            Serial.println("   - Attempting MQTT reconnection...");
-            connectToMQTT();
-        }
-    }
-    
-    Serial.println("🏁 === DISCOVERY RESPONSE COMPLETE ===");
-    Serial.println();
-}
-
-void loop() {
-    // Handle MQTT connection - this is critical for receiving messages
-    client.loop();
-    delay(10);
-    
-    // Check connections and reconnect if necessary
-    checkConnections();
-    
-    // Read sensors (simulate sensor readings)
-    temperature = random(20, 35);
-    humidity = random(40, 80);
-    lightLevel = analogRead(32);
-    
-    // Publish sensor data every 10 seconds
-    if (millis() - lastMillis > 10000) {
-        lastMillis = millis();
-        
-        if (mqttConnected) {
-            publishSensorData();
-            publishDeviceStatus();
-        } else {
-            Serial.println("⚠️ Skipping data publish - MQTT not connected");
-        }
-    }
-    
-    // Send heartbeat every 30 seconds
-    if (millis() - lastHeartbeat > heartbeatInterval) {
-        lastHeartbeat = millis();
-        
-        if (mqttConnected) {
-            publishHeartbeat();
-        }
-    }
-}
-
-void checkConnections() {
-    // Check WiFi connection
-    if (WiFi.status() != WL_CONNECTED) {
-        if (wifiConnected) {
-            Serial.println("⚠️ WiFi connection lost!");
-            wifiConnected = false;
-            mqttConnected = false;
-        }
-        
-        if (millis() - lastReconnectAttempt > reconnectInterval) {
-            Serial.println("🔄 Attempting WiFi reconnection...");
-            connectToWiFi();
-            lastReconnectAttempt = millis();
-        }
-        return;
-    } else if (!wifiConnected) {
-        wifiConnected = true;
-        Serial.println("✅ WiFi reconnected!");
-    }
-    
-    // Check MQTT connection
-    if (!client.connected()) {
-        if (mqttConnected) {
-            Serial.println("⚠️ MQTT connection lost!");
-            mqttConnected = false;
-        }
-        
-        if (millis() - lastReconnectAttempt > reconnectInterval) {
-            Serial.println("🔄 Attempting MQTT reconnection...");
-            connectToMQTT();
-            lastReconnectAttempt = millis();
-        }
-    } else if (!mqttConnected) {
-        mqttConnected = true;
-        Serial.println("✅ MQTT reconnected!");
-        // Republish discovery after reconnection
-        delay(1000);
-        publishDeviceDiscovery();
-    }
+    Serial.println("=== DEVICE DISCOVERY PUBLISHED ===");
+    Serial.println(jsonString);
 }
 
 void publishSensorData() {
-    if (!mqttConnected) return;
-    
-    DynamicJsonDocument doc(1024);
+    DynamicJsonDocument doc(4096);
     
     doc["device_id"] = device_id;
-    doc["device_name"] = device_name;
-    doc["timestamp"] = millis() / 1000;
-    doc["message_id"] = millis(); // Add unique message ID
     
     JsonObject sensors = doc.createNestedObject("sensors");
-    sensors["temperature"] = temperature;
-    sensors["humidity"] = humidity;
-    sensors["light"] = map(lightLevel, 0, 4095, 0, 100);
-    sensors["wifi_signal"] = WiFi.RSSI();
+    sensors["temperature"] = round(temperature * 10) / 10.0;
+    sensors["humidity"] = round(humidity * 10) / 10.0;
+    sensors["light"] = lightLevel;
+    sensors["potentiometer"] = potValue;
+    sensors["wifi_signal"] = wifiSignal;
+    sensors["battery"] = round(batteryLevel * 10) / 10.0;
     
     String jsonString;
     serializeJson(doc, jsonString);
     
     String dataTopic = "devices/" + device_id + "/data";
+    client.publish(dataTopic, jsonString, false, 0);
     
-    // Use QoS 0 for sensor data (frequent updates, loss acceptable)
-    bool published = client.publish(dataTopic, jsonString, false, 0);
-    
-    if (published) {
-        Serial.println("📊 Sensor data published: T=" + String(temperature) + 
-                      "°C, H=" + String(humidity) + "%, L=" + 
-                      String(map(lightLevel, 0, 4095, 0, 100)) + "%, RSSI=" + 
-                      String(WiFi.RSSI()) + "dBm");
-    } else {
-        Serial.println("❌ Failed to publish sensor data");
-    }
+    Serial.println("Sensor data published - T:" + String(temperature) + "°C H:" + String(humidity) + "% L:" + String(lightLevel) + "% P:" + String(potValue) + "%");
 }
 
-void publishDeviceStatus() {
-    if (!mqttConnected) return;
-    
+void publishDeviceStatus(String status) {
     DynamicJsonDocument doc(512);
     
     doc["device_id"] = device_id;
-    doc["status"] = "online";
-    doc["uptime"] = millis() / 1000;
-    doc["free_heap"] = ESP.getFreeHeap();
-    doc["wifi_rssi"] = WiFi.RSSI();
+    doc["status"] = status;
     doc["timestamp"] = millis() / 1000;
-    doc["discovery_count"] = discoveryCount;
-    doc["message_type"] = "status";
     
     String jsonString;
     serializeJson(doc, jsonString);
     
     String statusTopic = "devices/" + device_id + "/status";
+    client.publish(statusTopic, jsonString, true, 0);
     
-    // Use QoS 1 for status updates (important but not critical)
-    bool published = client.publish(statusTopic, jsonString, false, 1);
-    
-    if (!published) {
-        Serial.println("❌ Failed to publish device status");
-    }
+    Serial.println("Status published: " + status);
 }
 
-void publishHeartbeat() {
-    if (!mqttConnected) return;
-    
+void publishControlResponse(String control, String value) {
     DynamicJsonDocument doc(256);
     
     doc["device_id"] = device_id;
-    doc["message_type"] = "heartbeat";
+    doc["control"] = control;
+    doc["value"] = value;
     doc["timestamp"] = millis() / 1000;
-    doc["uptime"] = millis() / 1000;
-    doc["free_heap"] = ESP.getFreeHeap();
-    doc["wifi_rssi"] = WiFi.RSSI();
-    doc["discovery_count"] = discoveryCount;
+    doc["status"] = "executed";
     
     String jsonString;
     serializeJson(doc, jsonString);
     
-    String heartbeatTopic = "devices/" + device_id + "/heartbeat";
-    client.publish(heartbeatTopic, jsonString, false, 0);
+    String responseTopic = "devices/" + device_id + "/control/response";
+    client.publish(responseTopic, jsonString);
     
-    Serial.println("💓 Heartbeat sent - Uptime: " + String(millis() / 1000) + "s, Heap: " + String(ESP.getFreeHeap()));
+    Serial.println("Control response: " + control + " = " + value);
+}
+
+void handleCalibrationUpdate(String payload) {
+    DynamicJsonDocument doc(512);
+    deserializeJson(doc, payload);
+    
+    if (doc.containsKey("temperature_offset")) {
+        tempOffset = doc["temperature_offset"];
+        Serial.println("Temperature offset updated: " + String(tempOffset));
+    }
+    
+    if (doc.containsKey("humidity_offset")) {
+        humOffset = doc["humidity_offset"];
+        Serial.println("Humidity offset updated: " + String(humOffset));
+    }
+    
+    publishControlResponse("calibration", "updated");
+}
+
+void handleSensorConfig(String payload) {
+    Serial.println("Sensor configuration update: " + payload);
+    publishControlResponse("sensor_config", "updated");
 }

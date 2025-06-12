@@ -15,7 +15,9 @@ class ViewDevice extends ViewRecord
     public function infolist(Infolist $infolist): Infolist
     {
         return $infolist
+            
             ->schema([
+                ->poll('10s')
                 // Device Basic Information
                 Infolists\Components\Section::make('Device Information')
                     ->schema([

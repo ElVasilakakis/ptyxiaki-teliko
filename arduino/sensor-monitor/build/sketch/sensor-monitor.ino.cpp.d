@@ -211,4 +211,10 @@ C:\Users\tsigk\Desktop\Ptyxiaki\ptyxiaki-final\ptyxiaki-final\arduino\sensor-mon
  C:\Users\tsigk\Documents\Arduino\libraries\MQTT\src/lwmqtt/lwmqtt.h \
  C:\Users\tsigk\Documents\Arduino\libraries\ArduinoJson\src/ArduinoJson.h \
  C:\Users\tsigk\Documents\Arduino\libraries\ArduinoJson\src/ArduinoJson.hpp \
- C:\Users\tsigk\Documents\Arduino\libraries\ArduinoJson\src/ArduinoJson/Configuration.hpp
+ C:\Users\tsigk\Documents\Arduino\libraries\ArduinoJson\src/ArduinoJson/Configuration.hpp \
+ C:\Users\tsigk\Documents\Arduino\libraries\DHT_sensor_library/DHT.h \
+ C:\Users\tsigk\Documents\Arduino\libraries\LiquidCrystal_I2C/LiquidCrystal_I2C.h \
+ C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\libraries\Wire\src/Wire.h \
+ C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\cores\esp32/esp32-hal.h \
+ C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\cores\esp32/esp32-hal-log.h \
+ C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\cores\esp32/HardwareI2C.h
