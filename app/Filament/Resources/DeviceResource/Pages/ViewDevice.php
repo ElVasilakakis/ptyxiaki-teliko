@@ -15,9 +15,7 @@ class ViewDevice extends ViewRecord
     public function infolist(Infolist $infolist): Infolist
     {
         return $infolist
-            
             ->schema([
-                ->poll('10s')
                 // Device Basic Information
                 Infolists\Components\Section::make('Device Information')
                     ->schema([
@@ -122,7 +120,9 @@ class ViewDevice extends ViewRecord
                     ])->columns(3),
 
                 // Sensors Information
+                // Sensors Information
                 Infolists\Components\Section::make('Connected Sensors')
+                    ->extraAttributes(['wire:poll.5s' => '']) // Add this line for 5-second polling
                     ->schema([
                         Infolists\Components\RepeatableEntry::make('sensors')
                             ->schema([
