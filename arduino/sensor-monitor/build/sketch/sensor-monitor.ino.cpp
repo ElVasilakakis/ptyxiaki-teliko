@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include <DHT.h>
 #include <LiquidCrystal_I2C.h>
+#include <TinyGPS++.h>
 
 // DHT22 Configuration
 #define DHTPIN 15
@@ -13,6 +14,11 @@ DHT dht(DHTPIN, DHTTYPE);
 
 // LCD Configuration
 LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// GPS Configuration - Using Hardware Serial
+HardwareSerial gpsSerial(2);
+static const uint32_t GPSBaud = 9600;
+TinyGPSPlus gps;
 
 // Pin Definitions
 #define PHOTORESISTOR_PIN 32
@@ -34,12 +40,13 @@ MQTTClient client(4096);
 unsigned long lastMillis = 0;
 unsigned long lastDiscovery = 0;
 unsigned long lastLcdUpdate = 0;
+unsigned long lastGpsUpdate = 0;
 
 // Device Configuration
 const String device_id = "ESP32-DEV-001";
-const String device_name = "Environmental Sensor Monitor";
-const String firmware_version = "1.2.0";
-const String device_type = "ESP32_ENVIRONMENTAL";
+const String device_name = "Environmental Sensor Monitor with GPS";
+const String firmware_version = "1.3.0";
+const String device_type = "ESP32_ENVIRONMENTAL_GPS";
 
 // Sensor variables
 float temperature = 0.0;
@@ -48,6 +55,22 @@ int lightLevel = 0;
 int potValue = 0;
 int wifiSignal = 0;
 float batteryLevel = 100.0; // Simulated battery
+
+// GPS variables
+double latitude = 0.0;
+double longitude = 0.0;
+double altitude = 0.0;
+double speed_kmh = 0.0;
+int satellites = 0;
+bool gpsValid = false;
+String gpsTimestamp = "";
+
+// Random GPS simulation variables
+const double BASE_LATITUDE = 37.7749;   // San Francisco base coordinates
+const double BASE_LONGITUDE = -122.4194;
+const double RADIUS_METERS = 1000.0;    // 1000 meter radius
+bool useSimulatedGPS = false;
+unsigned long lastLocationChange = 0;
 
 // Calibration offsets
 float tempOffset = 0.0;
@@ -58,28 +81,31 @@ void connect();
 void messageReceived(String &topic, String &payload);
 void publishDeviceDiscovery();
 void readSensors();
+void readGPSData();
+void generateRandomGPSLocation();
 void publishSensorData();
+void publishGPSData();
 void publishDeviceStatus(String status = "online");
 void publishControlResponse(String control, String value);
 void handleCalibrationUpdate(String payload);
 void handleSensorConfig(String payload);
 void updateLCD();
 
-#line 66 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 92 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void setup();
-#line 112 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 145 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void loop();
-#line 344 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 558 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void publishDeviceStatus(String status);
-#line 66 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
+#line 92 "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\sensor-monitor.ino"
 void setup() {
     Serial.begin(115200);
     delay(1000);
     
-    Serial.println("=== ESP32 MQTT Environmental Monitor ===");
+    Serial.println("=== ESP32 MQTT Environmental Monitor with GPS ===");
     Serial.println("Device ID: " + device_id);
     Serial.println("Firmware: " + firmware_version);
-    Serial.println("========================================");
+    Serial.println("==============================================");
     
     // Initialize pins
     pinMode(GREEN_LED_PIN, OUTPUT);
@@ -89,6 +115,10 @@ void setup() {
     
     // Initialize DHT22 sensor
     dht.begin();
+    
+    // Initialize GPS with Hardware Serial
+    gpsSerial.begin(GPSBaud, SERIAL_8N1, 16, 17); // RX=16, TX=17
+    Serial.println("GPS module initialized with Hardware Serial");
     
     // Initialize LCD
     lcd.init();
@@ -116,6 +146,9 @@ void setup() {
     lcd.setCursor(0, 0);
     lcd.print("System Ready");
     delay(2000);
+    
+    // Enable simulated GPS after 30 seconds
+    Serial.println("GPS simulation will start in 30 seconds...");
 }
 
 void loop() {
@@ -127,12 +160,21 @@ void loop() {
         connect();
     }
     
-    // Publish data every 10 seconds
+    // Read GPS data continuously
+    readGPSData();
+    
+    // Publish sensor data every 10 seconds
     if (millis() - lastMillis > 10000) {
         lastMillis = millis();
         readSensors();
         publishSensorData();
         publishDeviceStatus(); 
+    }
+    
+    // Publish GPS data every 15 seconds (if valid)
+    if (millis() - lastGpsUpdate > 15000 && gpsValid) {
+        lastGpsUpdate = millis();
+        publishGPSData();
     }
     
     // Update LCD every 2 seconds
@@ -204,6 +246,131 @@ void messageReceived(String &topic, String &payload) {
     }
 }
 
+void generateRandomGPSLocation() {
+    // Generate random point within 1000m radius circle
+    // Using uniform distribution within circle
+    
+    double u = random(0, 1000001) / 1000000.0; // Random between 0 and 1
+    double v = random(0, 1000001) / 1000000.0; // Random between 0 and 1
+    
+    // Convert radius to degrees (approximately 111,300 meters per degree)
+    double radiusInDegrees = RADIUS_METERS / 111300.0;
+    
+    // Generate uniform distribution within circle
+    double w = radiusInDegrees * sqrt(u);
+    double t = 2 * PI * v;
+    
+    // Calculate offset coordinates
+    double x = w * cos(t);
+    double y = w * sin(t);
+    
+    // Adjust for longitude compression at latitude
+    double adjustedX = x / cos(BASE_LATITUDE * PI / 180.0);
+    
+    // Set new coordinates
+    latitude = BASE_LATITUDE + y;
+    longitude = BASE_LONGITUDE + adjustedX;
+    
+    // Simulate other GPS data
+    altitude = 50.0 + random(-20, 21); // 30-70 meters
+    speed_kmh = random(0, 51) / 10.0;   // 0-5 km/h
+    satellites = random(6, 13);         // 6-12 satellites
+    gpsValid = true;
+    
+    // Generate timestamp
+    unsigned long currentTime = millis() / 1000;
+    char timeBuffer[32];
+    sprintf(timeBuffer, "2025-06-21 %02d:%02d:%02d", 
+            (int)((currentTime / 3600) % 24), 
+            (int)((currentTime / 60) % 60), 
+            (int)(currentTime % 60));
+    gpsTimestamp = String(timeBuffer);
+}
+
+void readGPSData() {
+    // Try to read real GPS data first
+    bool realGpsData = false;
+    while (gpsSerial.available() > 0) {
+        if (gps.encode(gpsSerial.read())) {
+            if (gps.location.isValid()) {
+                latitude = gps.location.lat();
+                longitude = gps.location.lng();
+                gpsValid = true;
+                realGpsData = true;
+                useSimulatedGPS = false;
+                
+                // Get additional GPS data
+                if (gps.altitude.isValid()) {
+                    altitude = gps.altitude.meters();
+                }
+                
+                if (gps.speed.isValid()) {
+                    speed_kmh = gps.speed.kmph();
+                }
+                
+                if (gps.satellites.isValid()) {
+                    satellites = gps.satellites.value();
+                }
+                
+                if (gps.time.isValid() && gps.date.isValid()) {
+                    char timeBuffer[32];
+                    sprintf(timeBuffer, "%04d-%02d-%02d %02d:%02d:%02d", 
+                            gps.date.year(), gps.date.month(), gps.date.day(),
+                            gps.time.hour(), gps.time.minute(), gps.time.second());
+                    gpsTimestamp = String(timeBuffer);
+                }
+                
+                Serial.println("=== REAL GPS Data ===");
+                Serial.println("Latitude: " + String(latitude, 6));
+                Serial.println("Longitude: " + String(longitude, 6));
+                Serial.println("Altitude: " + String(altitude, 2) + " m");
+                Serial.println("Speed: " + String(speed_kmh, 2) + " km/h");
+                Serial.println("Satellites: " + String(satellites));
+                Serial.println("Timestamp: " + gpsTimestamp);
+                Serial.println("====================");
+                return;
+            }
+        }
+    }
+    
+    // If no real GPS data and enough time has passed, use simulated GPS
+    if (!realGpsData && millis() > 30000) { // Start simulation after 30 seconds
+        if (!useSimulatedGPS) {
+            Serial.println("=== Starting GPS Simulation ===");
+            Serial.println("Generating random locations within 1000m radius");
+            Serial.println("Base location: San Francisco (" + String(BASE_LATITUDE, 6) + ", " + String(BASE_LONGITUDE, 6) + ")");
+            Serial.println("===============================");
+            useSimulatedGPS = true;
+            generateRandomGPSLocation();
+            lastLocationChange = millis();
+        } else {
+            // Change location every 60 seconds
+            if (millis() - lastLocationChange > 60000) {
+                generateRandomGPSLocation();
+                lastLocationChange = millis();
+                
+                Serial.println("=== SIMULATED GPS Data ===");
+                Serial.println("Latitude: " + String(latitude, 6));
+                Serial.println("Longitude: " + String(longitude, 6));
+                Serial.println("Altitude: " + String(altitude, 2) + " m");
+                Serial.println("Speed: " + String(speed_kmh, 2) + " km/h");
+                Serial.println("Satellites: " + String(satellites));
+                Serial.println("Timestamp: " + gpsTimestamp);
+                Serial.println("Distance from base: ~" + String(random(100, 1001)) + "m");
+                Serial.println("===========================");
+            }
+        }
+    } else if (!realGpsData) {
+        // Still waiting for GPS or simulation to start
+        static unsigned long lastGpsWarning = 0;
+        if (millis() - lastGpsWarning > 10000) { // Show warning every 10 seconds
+            Serial.println("GPS: Waiting for satellite fix or starting simulation...");
+            lastGpsWarning = millis();
+        }
+        gpsValid = false;
+    }
+}
+
 void readSensors() {
     // Read DHT22 sensor
     humidity = dht.readHumidity();
@@ -212,7 +379,6 @@ void readSensors() {
     // Check if DHT22 readings are valid
     if (isnan(humidity) || isnan(temperature)) {
         Serial.println("Failed to read from DHT22 sensor!");
-        // Keep previous values or set to error values
         if (isnan(humidity)) humidity = -1;
         if (isnan(temperature)) temperature = -999;
     }
@@ -249,17 +415,28 @@ void readSensors() {
 void updateLCD() {
     lcd.clear();
     
-    // First line: Temperature and Humidity
-    lcd.setCursor(0, 0);
-    if (temperature != -999 && humidity != -1) {
-        lcd.print("T:" + String(temperature, 1) + "C H:" + String(humidity, 1) + "%");
+    if (gpsValid) {
+        // Show GPS coordinates on LCD when available
+        lcd.setCursor(0, 0);
+        lcd.print("GPS: " + String(latitude, 4));
+        lcd.setCursor(0, 1);
+        if (useSimulatedGPS) {
+            lcd.print("SIM: " + String(longitude, 4));
+        } else {
+            lcd.print("     " + String(longitude, 4));
+        }
     } else {
-        lcd.print("DHT22 Error!");
+        // Show sensor data when GPS not available
+        lcd.setCursor(0, 0);
+        if (temperature != -999 && humidity != -1) {
+            lcd.print("T:" + String(temperature, 1) + "C H:" + String(humidity, 1) + "%");
+        } else {
+            lcd.print("DHT22 Error!");
+        }
+        
+        lcd.setCursor(0, 1);
+        lcd.print("L:" + String(lightLevel) + "% P:" + String(potValue) + "%");
     }
-    
-    // Second line: Light and Potentiometer
-    lcd.setCursor(0, 1);
-    lcd.print("L:" + String(lightLevel) + "% P:" + String(potValue) + "%");
 }
 
 void publishDeviceDiscovery() {
@@ -318,6 +495,16 @@ void publishDeviceDiscovery() {
     batterySensor["unit"] = "percent";
     batterySensor["value"] = round(batteryLevel * 10) / 10.0;
 
+    // GPS Sensor
+    JsonObject gpsSensor = sensors.createNestedObject();
+    gpsSensor["sensor_type"] = "gps";
+    gpsSensor["sensor_name"] = useSimulatedGPS ? "Simulated GPS Module" : "NEO-6M GPS Module";
+    gpsSensor["unit"] = "coordinates";
+    gpsSensor["latitude"] = latitude;
+    gpsSensor["longitude"] = longitude;
+    gpsSensor["valid"] = gpsValid;
+    gpsSensor["simulated"] = useSimulatedGPS;
+
     String jsonString;
     serializeJsonPretty(doc, jsonString);
     
@@ -350,12 +537,41 @@ void publishSensorData() {
     Serial.println("Sensor data published - T:" + String(temperature) + "°C H:" + String(humidity) + "% L:" + String(lightLevel) + "% P:" + String(potValue) + "%");
 }
 
+void publishGPSData() {
+    if (!gpsValid) return;
+    
+    DynamicJsonDocument doc(2048);
+    
+    doc["device_id"] = device_id;
+    doc["timestamp"] = gpsTimestamp;
+    doc["simulated"] = useSimulatedGPS;
+    
+    JsonObject location = doc.createNestedObject("location");
+    location["latitude"] = latitude;
+    location["longitude"] = longitude;
+    location["altitude"] = altitude;
+    location["speed_kmh"] = speed_kmh;
+    location["satellites"] = satellites;
+    location["valid"] = gpsValid;
+    
+    String jsonString;
+    serializeJson(doc, jsonString);
+    
+    String gpsTopic = "devices/" + device_id + "/gps";
+    client.publish(gpsTopic, jsonString, false, 1);
+    
+    String gpsType = useSimulatedGPS ? "SIMULATED" : "REAL";
+    Serial.println(gpsType + " GPS data published - Lat:" + String(latitude, 6) + " Lng:" + String(longitude, 6) + " Alt:" + String(altitude, 2) + "m");
+}
+
 void publishDeviceStatus(String status) {
     DynamicJsonDocument doc(512);
     
     doc["device_id"] = device_id;
     doc["status"] = status;
     doc["timestamp"] = millis() / 1000;
+    doc["gps_status"] = gpsValid ? "active" : "searching";
+    doc["gps_simulated"] = useSimulatedGPS;
     
     String jsonString;
     serializeJson(doc, jsonString);

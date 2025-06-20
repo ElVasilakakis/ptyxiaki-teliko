@@ -217,4 +217,5 @@ C:\Users\tsigk\Desktop\Ptyxiaki\ptyxiaki-final\ptyxiaki-final\arduino\sensor-mon
  C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\libraries\Wire\src/Wire.h \
  C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\cores\esp32/esp32-hal.h \
  C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\cores\esp32/esp32-hal-log.h \
- C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\cores\esp32/HardwareI2C.h
+ C:\Users\tsigk\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.2.0\cores\esp32/HardwareI2C.h \
+ C:\Users\tsigk\Documents\Arduino\libraries\TinyGPSPlus\src/TinyGPS++.h

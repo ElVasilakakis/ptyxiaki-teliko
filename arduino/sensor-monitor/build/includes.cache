@@ -46,6 +46,11 @@
   },
   {
     "Sourcefile": "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\build\\sketch\\sensor-monitor.ino.cpp",
+    "Include": "TinyGPS++.h",
+    "Includepath": "C:\\Users\\tsigk\\Documents\\Arduino\\libraries\\TinyGPSPlus\\src"
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Desktop\\Ptyxiaki\\ptyxiaki-final\\ptyxiaki-final\\arduino\\sensor-monitor\\build\\sketch\\sensor-monitor.ino.cpp",
     "Include": "",
     "Includepath": null
   },
@@ -166,6 +171,11 @@
   },
   {
     "Sourcefile": "C:\\Users\\tsigk\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.2.0\\libraries\\Wire\\src\\Wire.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "C:\\Users\\tsigk\\Documents\\Arduino\\libraries\\TinyGPSPlus\\src\\TinyGPS++.cpp",
     "Include": "",
     "Includepath": null
   },

@@ -25,6 +25,7 @@ class MqttDeviceService
             $mqtt->subscribe('devices/+/discovery/response', \Closure::fromCallable([$this, 'handleDeviceDiscovery']), $this->qos);
             $mqtt->subscribe('devices/+/data', \Closure::fromCallable([$this, 'handleDeviceData']), $this->qos);
             $mqtt->subscribe('devices/+/status', \Closure::fromCallable([$this, 'handleDeviceStatus']), $this->qos);
+            $mqtt->subscribe('devices/+/gps', \Closure::fromCallable([$this, 'handleDeviceGPS']), $this->qos); // GPS topic
             $mqtt->subscribe('devices/discover/all', \Closure::fromCallable([$this, 'handleGlobalDiscovery']), $this->qos);
 
             Log::info('MQTT subscriber started and listening for device messages.');
@@ -197,10 +198,141 @@ class MqttDeviceService
         }
     }
 
+    /**
+     * Handle GPS data from devices - treat GPS as sensor data
+     */
+    public function handleDeviceGPS(string $topic, string $message)
+    {
+        try {
+            $data = json_decode($message, true);
+            if (!$data || !isset($data['device_id'])) {
+                Log::warning('Received GPS message with invalid format.', ['topic' => $topic]);
+                return;
+            }
+
+            $device = Device::where('device_unique_id', $data['device_id'])->first();
+            if (!$device) {
+                Log::debug('GPS data received for unknown device', ['device_id' => $data['device_id']]);
+                return;
+            }
+
+            // Update device status
+            $device->update(['status' => 'online', 'last_seen_at' => now()]);
+
+            // Process GPS location data as sensor readings
+            if (isset($data['location']) && is_array($data['location'])) {
+                $this->storeGPSAsSensorData($device, $data['location'], $data['timestamp'] ?? null);
+            }
+
+            Log::debug('GPS sensor data processed', [
+                'device_id' => $device->device_unique_id,
+                'latitude' => $data['location']['latitude'] ?? null,
+                'longitude' => $data['location']['longitude'] ?? null
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error processing device GPS sensor data.', ['topic' => $topic, 'exception' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Store GPS data as individual sensor readings
+     */
+    private function storeGPSAsSensorData(Device $device, array $locationData, $timestamp = null)
+    {
+        try {
+            $readingTimestamp = $timestamp ? Carbon::parse($timestamp) : now();
+            
+            // Define GPS sensor mappings
+            $gpsSensorMappings = [
+                'gps_latitude' => [
+                    'name' => 'GPS Latitude',
+                    'unit' => 'degrees',
+                    'value' => $locationData['latitude'] ?? null
+                ],
+                'gps_longitude' => [
+                    'name' => 'GPS Longitude', 
+                    'unit' => 'degrees',
+                    'value' => $locationData['longitude'] ?? null
+                ],
+                'gps_altitude' => [
+                    'name' => 'GPS Altitude',
+                    'unit' => 'meters',
+                    'value' => $locationData['altitude'] ?? null
+                ],
+                'gps_speed' => [
+                    'name' => 'GPS Speed',
+                    'unit' => 'km/h',
+                    'value' => $locationData['speed_kmh'] ?? null
+                ],
+                'gps_satellites' => [
+                    'name' => 'GPS Satellites',
+                    'unit' => 'count',
+                    'value' => $locationData['satellites'] ?? null
+                ],
+                'gps_valid' => [
+                    'name' => 'GPS Signal Valid',
+                    'unit' => 'boolean',
+                    'value' => ($locationData['valid'] ?? false) ? 1 : 0
+                ]
+            ];
+
+            foreach ($gpsSensorMappings as $sensorType => $sensorConfig) {
+                if ($sensorConfig['value'] !== null) {
+                    // Find or create the sensor
+                    $sensor = $device->sensors()->where('sensor_type', $sensorType)->first();
+
+                    if (!$sensor) {
+                        $sensor = Sensor::create([
+                            'device_id' => $device->id,
+                            'sensor_type' => $sensorType,
+                            'sensor_name' => $sensorConfig['name'],
+                            'unit' => $sensorConfig['unit'],
+                            'value' => $sensorConfig['value'],
+                            'reading_timestamp' => $readingTimestamp,
+                            'enabled' => true,
+                        ]);
+                        
+                        Log::debug('GPS sensor created', [
+                            'device_id' => $device->device_unique_id,
+                            'sensor_type' => $sensorType,
+                            'sensor_id' => $sensor->id
+                        ]);
+                    } else {
+                        // Update existing sensor
+                        $sensor->update([
+                            'value' => $sensorConfig['value'],
+                            'reading_timestamp' => $readingTimestamp
+                        ]);
+                    }
+
+                    Log::debug('GPS sensor updated', [
+                        'device_id' => $device->device_unique_id,
+                        'sensor_type' => $sensorType,
+                        'value' => $sensorConfig['value']
+                    ]);
+                }
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Error storing GPS sensor data.', [
+                'device_id' => $device->device_unique_id,
+                'exception' => $e->getMessage()
+            ]);
+        }
+    }
+
     private function syncSensorsFromArduino(Device $device, array $sensorsData)
     {
         foreach ($sensorsData as $sensorData) {
             if (!isset($sensorData['sensor_type'])) {
+                continue;
+            }
+            
+            // Handle GPS sensor specially in discovery
+            if ($sensorData['sensor_type'] === 'gps') {
+                // Create GPS-related sensors if they don't exist
+                $this->createGPSSensorsFromDiscovery($device, $sensorData);
                 continue;
             }
             
@@ -220,6 +352,63 @@ class MqttDeviceService
                 'sensor_type' => $sensorData['sensor_type'],
                 'sensor_id' => $sensor->id
             ]);
+        }
+    }
+
+    /**
+     * Create GPS sensors from discovery response
+     */
+    private function createGPSSensorsFromDiscovery(Device $device, array $gpsData)
+    {
+        $gpsSensorTypes = [
+            'gps_latitude' => ['name' => 'GPS Latitude', 'unit' => 'degrees'],
+            'gps_longitude' => ['name' => 'GPS Longitude', 'unit' => 'degrees'],
+            'gps_altitude' => ['name' => 'GPS Altitude', 'unit' => 'meters'],
+            'gps_speed' => ['name' => 'GPS Speed', 'unit' => 'km/h'],
+            'gps_satellites' => ['name' => 'GPS Satellites', 'unit' => 'count'],
+            'gps_valid' => ['name' => 'GPS Signal Valid', 'unit' => 'boolean']
+        ];
+
+        foreach ($gpsSensorTypes as $sensorType => $config) {
+            $sensor = Sensor::updateOrCreate(
+                ['device_id' => $device->id, 'sensor_type' => $sensorType],
+                [
+                    'sensor_name' => $config['name'],
+                    'unit' => $config['unit'],
+                    'value' => $this->getGPSValueFromDiscovery($gpsData, $sensorType),
+                    'reading_timestamp' => now(),
+                    'enabled' => true,
+                ]
+            );
+
+            Log::debug('GPS sensor synced from discovery', [
+                'device_id' => $device->device_unique_id,
+                'sensor_type' => $sensorType,
+                'sensor_id' => $sensor->id
+            ]);
+        }
+    }
+
+    /**
+     * Extract GPS values from discovery data
+     */
+    private function getGPSValueFromDiscovery(array $gpsData, string $sensorType)
+    {
+        switch ($sensorType) {
+            case 'gps_latitude':
+                return $gpsData['latitude'] ?? null;
+            case 'gps_longitude':
+                return $gpsData['longitude'] ?? null;
+            case 'gps_altitude':
+                return null; // Not available in discovery
+            case 'gps_speed':
+                return null; // Not available in discovery
+            case 'gps_satellites':
+                return null; // Not available in discovery
+            case 'gps_valid':
+                return ($gpsData['valid'] ?? false) ? 1 : 0;
+            default:
+                return null;
         }
     }
     
@@ -278,6 +467,12 @@ class MqttDeviceService
             'pressure' => 'hPa',
             'voltage' => 'V',
             'current' => 'A',
+            'gps_latitude' => 'degrees',
+            'gps_longitude' => 'degrees',
+            'gps_altitude' => 'meters',
+            'gps_speed' => 'km/h',
+            'gps_satellites' => 'count',
+            'gps_valid' => 'boolean',
         ];
 
         return $unitMap[$sensorType] ?? null;
