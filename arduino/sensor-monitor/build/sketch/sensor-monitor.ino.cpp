@@ -322,7 +322,7 @@ void publishDeviceDiscovery() {
     serializeJsonPretty(doc, jsonString);
     
     String discoveryTopic = "devices/" + device_id + "/discovery/response";
-    client.publish(discoveryTopic, jsonString, false, 0);
+    client.publish(discoveryTopic, jsonString, false, 1);
     
     Serial.println("=== DEVICE DISCOVERY PUBLISHED ===");
     Serial.println(jsonString);
@@ -345,7 +345,7 @@ void publishSensorData() {
     serializeJson(doc, jsonString);
     
     String dataTopic = "devices/" + device_id + "/data";
-    client.publish(dataTopic, jsonString, false, 0);
+    client.publish(dataTopic, jsonString, false, 1);
     
     Serial.println("Sensor data published - T:" + String(temperature) + "°C H:" + String(humidity) + "% L:" + String(lightLevel) + "% P:" + String(potValue) + "%");
 }
@@ -361,7 +361,7 @@ void publishDeviceStatus(String status) {
     serializeJson(doc, jsonString);
     
     String statusTopic = "devices/" + device_id + "/status";
-    client.publish(statusTopic, jsonString, true, 0);
+    client.publish(statusTopic, jsonString, true, 1);
     
     Serial.println("Status published: " + status);
 }

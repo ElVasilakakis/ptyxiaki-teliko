@@ -36,6 +36,79 @@ class MqttDeviceService
         }
     }
 
+    /**
+     * Publish a command to a specific device
+     */
+    public function publishDeviceCommand($deviceId, $command, $parameters = [])
+    {
+        try {
+            $topic = "devices/{$deviceId}/commands";
+            $payload = json_encode([
+                'command' => $command,
+                'parameters' => $parameters,
+                'timestamp' => time(),
+                'request_id' => uniqid('cmd_')
+            ]);
+
+            $mqtt = MQTT::connection();
+            $mqtt->publish($topic, $payload, $this->qos);
+
+            Log::info('Device command published', [
+                'device_id' => $deviceId,
+                'command' => $command,
+                'topic' => $topic
+            ]);
+
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('Failed to publish device command', [
+                'device_id' => $deviceId,
+                'command' => $command,
+                'exception' => $e->getMessage()
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Publish device discovery request
+     */
+    public function publishDeviceDiscovery($deviceId, $userId = null, $userEmail = null)
+    {
+        try {
+            $topic = "devices/{$deviceId}/discover";
+            $payload = json_encode([
+                'action' => 'discover',
+                'timestamp' => time(),
+                'initiated_by' => $userEmail ?? auth()->user()->email ?? 'system',
+                'request_id' => uniqid('disc_')
+            ]);
+
+            // Store user context for discovery response handling
+            if ($userId) {
+                cache()->put("mqtt_user_context", $userId, 300); // 5 minutes
+            }
+
+            $mqtt = MQTT::connection();
+            $mqtt->publish($topic, $payload, $this->qos);
+
+            Log::info('Device discovery request published', [
+                'device_id' => $deviceId,
+                'topic' => $topic
+            ]);
+
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('Failed to publish device discovery', [
+                'device_id' => $deviceId,
+                'exception' => $e->getMessage()
+            ]);
+            return false;
+        }
+    }
+
     public function handleDeviceDiscovery(string $topic, string $message)
     {
         try {
@@ -81,13 +154,13 @@ class MqttDeviceService
             
             $device = Device::where('device_unique_id', $data['device_id'])->first();
             if (!$device) {
-                return; // Silently ignore data for unknown devices
+                Log::debug('Data received for unknown device', ['device_id' => $data['device_id']]);
+                return;
             }
 
             $device->update(['status' => 'online', 'last_seen_at' => now()]);
 
             if (isset($data['sensors']) && is_array($data['sensors'])) {
-                // *** FIX: Do not pass the unreliable device timestamp. ***
                 $this->updateSensorReadings($device, $data['sensors']);
             }
 
@@ -98,16 +171,27 @@ class MqttDeviceService
     
     public function handleDeviceStatus(string $topic, string $message)
     {
-        // ... Unchanged ...
         try {
             $data = json_decode($message, true);
-            if (!$data || !isset($data['device_id'])) return;
+            if (!$data || !isset($data['device_id'])) {
+                return;
+            }
+            
             $device = Device::where('device_unique_id', $data['device_id'])->first();
-            if (!$device) return;
+            if (!$device) {
+                return;
+            }
+            
             $device->update([
                 'status' => $data['status'] === 'online' ? 'online' : 'offline',
                 'last_seen_at' => now(),
             ]);
+
+            Log::debug('Device status updated', [
+                'device_id' => $device->device_unique_id,
+                'status' => $data['status']
+            ]);
+
         } catch (\Exception $e) {
             Log::error('Error processing device status.', ['topic' => $topic, 'exception' => $e->getMessage()]);
         }
@@ -116,22 +200,29 @@ class MqttDeviceService
     private function syncSensorsFromArduino(Device $device, array $sensorsData)
     {
         foreach ($sensorsData as $sensorData) {
-            if (!isset($sensorData['sensor_type'])) continue;
+            if (!isset($sensorData['sensor_type'])) {
+                continue;
+            }
             
-            Sensor::updateOrCreate(
+            $sensor = Sensor::updateOrCreate(
                 ['device_id' => $device->id, 'sensor_type' => $sensorData['sensor_type']],
                 [
                     'sensor_name' => $sensorData['sensor_name'] ?? ucfirst($sensorData['sensor_type']),
                     'unit' => $sensorData['unit'] ?? null,
                     'value' => $sensorData['value'] ?? null,
-                    'reading_timestamp' => now(), // Use server time for initial reading
+                    'reading_timestamp' => now(),
                     'enabled' => true,
                 ]
             );
+
+            Log::debug('Sensor synced', [
+                'device_id' => $device->device_unique_id,
+                'sensor_type' => $sensorData['sensor_type'],
+                'sensor_id' => $sensor->id
+            ]);
         }
     }
     
-    // *** FIX: Removed the $timestamp parameter and now use now() for all updates. ***
     private function updateSensorReadings(Device $device, array $sensorsData)
     {
         foreach ($sensorsData as $sensorType => $value) {
@@ -139,31 +230,67 @@ class MqttDeviceService
                 $sensor = $device->sensors()->where('sensor_type', $sensorType)->first();
 
                 if (!$sensor) {
-                    Log::warning('Data received for an unsynced sensor.', [
+                    // Auto-create missing sensors instead of just warning
+                    $sensor = Sensor::create([
+                        'device_id' => $device->id,
+                        'sensor_type' => $sensorType,
+                        'sensor_name' => ucfirst(str_replace('_', ' ', $sensorType)),
+                        'unit' => $this->guessUnit($sensorType),
+                        'value' => $value,
+                        'reading_timestamp' => now(),
+                        'enabled' => true,
+                    ]);
+
+                    Log::info('Auto-created missing sensor', [
                         'device_id' => $device->device_unique_id,
                         'sensor_type' => $sensorType,
+                        'sensor_id' => $sensor->id
                     ]);
-                    continue;
+                } else {
+                    $sensor->update([
+                        'value' => $value + ($sensor->calibration_offset ?? 0),
+                        'reading_timestamp' => now()
+                    ]);
                 }
-                
-                $sensor->update([
-                    'value' => $value + ($sensor->calibration_offset ?? 0),
-                    'reading_timestamp' => now() // Use the reliable server time
-                ]);
 
             } catch (\Exception $e) {
-                // Now we log the actual error with context
-                Log::error('Error updating a single sensor reading.', [
-                    'device_id' => $device->id,
+                Log::error('Error updating sensor reading.', [
+                    'device_id' => $device->device_unique_id,
                     'sensor_type' => $sensorType,
                     'exception' => $e->getMessage()
                 ]);
             }
         }
     }
+
+    /**
+     * Guess appropriate unit based on sensor type
+     */
+    private function guessUnit($sensorType)
+    {
+        $unitMap = [
+            'temperature' => 'celsius',
+            'humidity' => 'percent',
+            'light' => 'percent',
+            'potentiometer' => 'percent',
+            'wifi_signal' => 'dBm',
+            'battery' => 'percent',
+            'pressure' => 'hPa',
+            'voltage' => 'V',
+            'current' => 'A',
+        ];
+
+        return $unitMap[$sensorType] ?? null;
+    }
     
     public function handleGlobalDiscovery(string $topic, string $message)
     {
         Log::info("Global discovery request received via MQTT.");
+        
+        // Optionally broadcast discovery to all known devices
+        $devices = Device::where('enabled', true)->get();
+        foreach ($devices as $device) {
+            $this->publishDeviceDiscovery($device->device_unique_id);
+        }
     }
 }
