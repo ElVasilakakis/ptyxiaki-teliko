@@ -52,7 +52,7 @@ float humidity = 0.0;
 int lightLevel = 0;
 int potValue = 0;
 int wifiSignal = 0;
-float batteryLevel = 100.0; // Simulated battery
+float batteryLevel = 100.0;
 
 // GPS variables
 double latitude = 0.0;
@@ -63,10 +63,33 @@ int satellites = 0;
 bool gpsValid = false;
 String gpsTimestamp = "";
 
-// Random GPS simulation variables
-const double BASE_LATITUDE = 37.7749;   // San Francisco base coordinates
-const double BASE_LONGITUDE = -122.4194;
-const double RADIUS_METERS = 1000.0;    // 1000 meter radius
+// Geofence testing variables
+bool testGeofencing = true;
+bool generateInsideGeofence = true;  // Start with inside
+unsigned long lastGeofenceToggle = 0;
+const unsigned long geofenceToggleInterval = 120000;  // 2 minutes
+
+// Xorafi 1 polygon coordinates (Colorado)
+const double XORAFI_COORDS[][2] = {
+    {-107.744122, 39.495387},
+    {-107.744122, 39.529577},
+    {-107.653999, 39.529577},
+    {-107.653999, 39.495387},
+    {-107.744122, 39.495387}  // Close the polygon
+};
+const int XORAFI_COORD_COUNT = 5;
+
+// Xorafi 1 bounding box for inside generation
+const double XORAFI_MIN_LAT = 39.495387;
+const double XORAFI_MAX_LAT = 39.529577;
+const double XORAFI_MIN_LNG = -107.744122;
+const double XORAFI_MAX_LNG = -107.653999;
+
+// San Francisco base coordinates (for outside testing)
+const double SF_BASE_LAT = 37.7749;
+const double SF_BASE_LNG = -122.4194;
+const double RADIUS_METERS = 1000.0;
+
 bool useSimulatedGPS = false;
 unsigned long lastLocationChange = 0;
 
@@ -80,7 +103,12 @@ void messageReceived(String &topic, String &payload);
 void publishDeviceDiscovery();
 void readSensors();
 void readGPSData();
-void generateRandomGPSLocation();
+void generateGPSData();
+void generateInsideXorafi();
+void generateOutsideXorafi();
+void generateSanFranciscoRandom();
+bool isPointInPolygon(double lat, double lng);
+void generateGPSTimestamp();
 void publishSensorData();
 void publishGPSData();
 void publishDeviceStatus(String status = "online");
@@ -93,10 +121,13 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
     
-    Serial.println("=== ESP32 MQTT Environmental Monitor with GPS ===");
+    Serial.println("=== ESP32 GEOFENCE TESTING DEVICE ===");
     Serial.println("Device ID: " + device_id);
     Serial.println("Firmware: " + firmware_version);
-    Serial.println("==============================================");
+    Serial.println("=====================================");
+    
+    // Initialize random seed
+    randomSeed(analogRead(0));
     
     // Initialize pins
     pinMode(GREEN_LED_PIN, OUTPUT);
@@ -130,16 +161,24 @@ void setup() {
     
     connect();
     
-    Serial.println("=== Setup Complete ===");
+    Serial.println("=== GEOFENCE TESTING MODE ACTIVE ===");
+    Serial.println("Will alternate between INSIDE and OUTSIDE Xorafi 1 every 2 minutes");
+    Serial.println("Current mode: " + String(generateInsideGeofence ? "INSIDE" : "OUTSIDE"));
+    Serial.println("=====================================");
+    
     digitalWrite(GREEN_LED_PIN, HIGH);
     
     lcd.clear();
     lcd.setCursor(0, 0);
-    lcd.print("System Ready");
-    delay(2000);
+    lcd.print("Geofence Test");
+    lcd.setCursor(0, 1);
+    lcd.print("Mode: " + String(generateInsideGeofence ? "INSIDE" : "OUTSIDE"));
+    delay(3000);
     
-    // Enable simulated GPS after 30 seconds
-    Serial.println("GPS simulation will start in 30 seconds...");
+    // Start GPS simulation immediately for testing
+    Serial.println("Starting GPS simulation for geofence testing...");
+    useSimulatedGPS = true;
+    generateGPSData();
 }
 
 void loop() {
@@ -151,31 +190,51 @@ void loop() {
         connect();
     }
     
-    // Read GPS data continuously
+    unsigned long currentTime = millis();
+    
+    // Toggle geofence mode every 2 minutes
+    if (currentTime - lastGeofenceToggle > geofenceToggleInterval) {
+        generateInsideGeofence = !generateInsideGeofence;
+        lastGeofenceToggle = currentTime;
+        
+        Serial.println("\n=== GEOFENCE TEST MODE SWITCHED ===");
+        Serial.println("Now generating: " + String(generateInsideGeofence ? "INSIDE" : "OUTSIDE") + " Xorafi 1");
+        Serial.println("===================================\n");
+        
+        // Update LCD to show new mode
+        lcd.clear();
+        lcd.setCursor(0, 1);
+        lcd.print("Mode: " + String(generateInsideGeofence ? "INSIDE" : "OUTSIDE"));
+        
+        // Generate new GPS data immediately after mode switch
+        generateGPSData();
+    }
+    
+    // Read GPS data (simulated for testing)
     readGPSData();
     
     // Publish sensor data every 10 seconds
-    if (millis() - lastMillis > 10000) {
-        lastMillis = millis();
+    if (currentTime - lastMillis > 10000) {
+        lastMillis = currentTime;
         readSensors();
         publishSensorData();
         publishDeviceStatus(); 
     }
     
     // Publish GPS data every 15 seconds (if valid)
-    if (millis() - lastGpsUpdate > 15000 && gpsValid) {
-        lastGpsUpdate = millis();
+    if (currentTime - lastGpsUpdate > 15000 && gpsValid) {
+        lastGpsUpdate = currentTime;
         publishGPSData();
     }
     
-    // Update LCD every 2 seconds
-    if (millis() - lastLcdUpdate > 2000) {
-        lastLcdUpdate = millis();
+    // Update LCD every 3 seconds
+    if (currentTime - lastLcdUpdate > 3000) {
+        lastLcdUpdate = currentTime;
         updateLCD();
     }
     
     // Auto-republish discovery every 5 minutes
-    if (millis() - lastDiscovery > 300000) {
+    if (currentTime - lastDiscovery > 300000) {
         lastDiscovery = millis();
         publishDeviceDiscovery();
     }
@@ -222,6 +281,14 @@ void messageReceived(String &topic, String &payload) {
         publishControlResponse("blue_led", payload.toInt() ? "on" : "off");
     }
     
+    if(topic == "devices/" + device_id + "/control/toggle_geofence") {
+        generateInsideGeofence = !generateInsideGeofence;
+        lastGeofenceToggle = millis(); // Reset timer
+        Serial.println("Manually toggled to: " + String(generateInsideGeofence ? "INSIDE" : "OUTSIDE"));
+        generateGPSData(); // Generate new coordinates immediately
+        publishControlResponse("toggle_geofence", generateInsideGeofence ? "inside" : "outside");
+    }
+    
     if(topic == "devices/" + device_id + "/config/calibration") {
         handleCalibrationUpdate(payload);
     }
@@ -237,129 +304,167 @@ void messageReceived(String &topic, String &payload) {
     }
 }
 
-void generateRandomGPSLocation() {
-    // Generate random point within 1000m radius circle
-    // Using uniform distribution within circle
+void readGPSData() {
+    // For testing, we always use simulated GPS with geofence testing
+    if (useSimulatedGPS) {
+        // Change location every 30 seconds for more frequent updates
+        if (millis() - lastLocationChange > 30000) {
+            generateGPSData();
+            lastLocationChange = millis();
+        }
+    } else {
+        // Try to read real GPS data (keeping original functionality)
+        bool realGpsData = false;
+        while (gpsSerial.available() > 0) {
+            if (gps.encode(gpsSerial.read())) {
+                if (gps.location.isValid()) {
+                    latitude = gps.location.lat();
+                    longitude = gps.location.lng();
+                    gpsValid = true;
+                    realGpsData = true;
+                    useSimulatedGPS = false;
+                    
+                    if (gps.altitude.isValid()) {
+                        altitude = gps.altitude.meters();
+                    }
+                    
+                    if (gps.speed.isValid()) {
+                        speed_kmh = gps.speed.kmph();
+                    }
+                    
+                    if (gps.satellites.isValid()) {
+                        satellites = gps.satellites.value();
+                    }
+                    
+                    if (gps.time.isValid() && gps.date.isValid()) {
+                        char timeBuffer[32];
+                        sprintf(timeBuffer, "%04d-%02d-%02d %02d:%02d:%02d", 
+                                gps.date.year(), gps.date.month(), gps.date.day(),
+                                gps.time.hour(), gps.time.minute(), gps.time.second());
+                        gpsTimestamp = String(timeBuffer);
+                    }
+                    
+                    Serial.println("=== REAL GPS Data ===");
+                    Serial.println("Latitude: " + String(latitude, 6));
+                    Serial.println("Longitude: " + String(longitude, 6));
+                    return;
+                }
+            }
+        }
+        
+        // If no real GPS, start simulation
+        if (!realGpsData && !useSimulatedGPS) {
+            Serial.println("No real GPS detected, starting simulation for testing...");
+            useSimulatedGPS = true;
+            generateGPSData();
+            lastLocationChange = millis();
+        }
+    }
+}
+
+void generateGPSData() {
+    if (generateInsideGeofence) {
+        generateInsideXorafi();
+    } else {
+        generateOutsideXorafi();
+    }
     
-    double u = random(0, 1000001) / 1000000.0; // Random between 0 and 1
-    double v = random(0, 1000001) / 1000000.0; // Random between 0 and 1
+    generateGPSTimestamp();
+}
+
+void generateInsideXorafi() {
+    // Updated coordinates for the new rectangular Xorafi polygon
+    // Based on your new geojson: lat range 39.495387 to 39.529577, lng range -107.744122 to -107.653999
     
-    // Convert radius to degrees (approximately 111,300 meters per degree)
-    double radiusInDegrees = RADIUS_METERS / 111300.0;
+    // For a rectangle, we can generate points more efficiently
+    // Generate random point within bounding box (all points will be inside for a rectangle)
+    double testLat = XORAFI_MIN_LAT + (random(0, 1000001) / 1000000.0) * (XORAFI_MAX_LAT - XORAFI_MIN_LAT);
+    double testLng = XORAFI_MIN_LNG + (random(0, 1000001) / 1000000.0) * (XORAFI_MAX_LNG - XORAFI_MIN_LNG);
     
-    // Generate uniform distribution within circle
-    double w = radiusInDegrees * sqrt(u);
-    double t = 2 * PI * v;
+    // Since your new polygon is a rectangle, any point within the bounding box is guaranteed to be inside
+    latitude = testLat;
+    longitude = testLng;
     
-    // Calculate offset coordinates
-    double x = w * cos(t);
-    double y = w * sin(t);
-    
-    // Adjust for longitude compression at latitude
-    double adjustedX = x / cos(BASE_LATITUDE * PI / 180.0);
-    
-    // Set new coordinates
-    latitude = BASE_LATITUDE + y;
-    longitude = BASE_LONGITUDE + adjustedX;
-    
-    // Simulate other GPS data
-    altitude = 50.0 + random(-20, 21); // 30-70 meters
-    speed_kmh = random(0, 51) / 10.0;   // 0-5 km/h
-    satellites = random(6, 13);         // 6-12 satellites
+    // Set Colorado-appropriate values
+    altitude = 2500.0 + random(-100, 101);  // 2400-2600m elevation (Colorado altitude)
+    speed_kmh = random(0, 31) / 10.0;       // 0-3 km/h (stationary to walking speed)
+    satellites = random(10, 15);            // Good satellite count for clear sky
     gpsValid = true;
     
-    // Generate timestamp
+    Serial.println("✓ INSIDE Xorafi rectangle generated");
+    Serial.println("GPS: " + String(latitude, 6) + ", " + String(longitude, 6) + " (INSIDE)");
+    Serial.println("Bounds: Lat[" + String(XORAFI_MIN_LAT, 6) + " to " + String(XORAFI_MAX_LAT, 6) + "] Lng[" + String(XORAFI_MIN_LNG, 6) + " to " + String(XORAFI_MAX_LNG, 6) + "]");
+}
+
+
+void generateOutsideXorafi() {
+    int locationChoice = random(0, 4);
+    
+    switch (locationChoice) {
+        case 0: // San Francisco
+            latitude = SF_BASE_LAT + (random(-1000, 1001) / 100000.0);
+            longitude = SF_BASE_LNG + (random(-1000, 1001) / 100000.0);
+            altitude = 50.0 + random(-20, 21);
+            Serial.println("✗ OUTSIDE Xorafi: San Francisco");
+            break;
+            
+        case 1: // Denver, Colorado (close but outside)
+            latitude = 39.7392 + (random(-500, 501) / 100000.0);
+            longitude = -104.9903 + (random(-500, 501) / 100000.0);
+            altitude = 1600.0 + random(-50, 51);
+            Serial.println("✗ OUTSIDE Xorafi: Denver");
+            break;
+            
+        case 2: // New York
+            latitude = 40.7128 + (random(-300, 301) / 100000.0);
+            longitude = -74.0060 + (random(-300, 301) / 100000.0);
+            altitude = 10.0 + random(-5, 16);
+            Serial.println("✗ OUTSIDE Xorafi: New York");
+            break;
+            
+        case 3: // Los Angeles
+            latitude = 34.0522 + (random(-300, 301) / 100000.0);
+            longitude = -118.2437 + (random(-300, 301) / 100000.0);
+            altitude = 100.0 + random(-30, 31);
+            Serial.println("✗ OUTSIDE Xorafi: Los Angeles");
+            break;
+    }
+    
+    speed_kmh = random(0, 801) / 10.0;  // 0-80 km/h
+    satellites = random(6, 13);
+    gpsValid = true;
+    
+    Serial.println("GPS: " + String(latitude, 6) + ", " + String(longitude, 6) + " (OUTSIDE)");
+}
+
+// Ray casting algorithm to check if point is inside polygon
+bool isPointInPolygon(double lat, double lng) {
+    int intersections = 0;
+    
+    for (int i = 0; i < XORAFI_COORD_COUNT - 1; i++) {
+        double x1 = XORAFI_COORDS[i][0];     // longitude
+        double y1 = XORAFI_COORDS[i][1];     // latitude
+        double x2 = XORAFI_COORDS[i + 1][0]; // longitude
+        double y2 = XORAFI_COORDS[i + 1][1]; // latitude
+        
+        // Check if ray crosses this edge
+        if (((y1 > lat) != (y2 > lat)) &&
+            (lng < (x2 - x1) * (lat - y1) / (y2 - y1) + x1)) {
+            intersections++;
+        }
+    }
+    
+    return (intersections % 2) == 1; // Odd number = inside
+}
+
+void generateGPSTimestamp() {
     unsigned long currentTime = millis() / 1000;
     char timeBuffer[32];
-    sprintf(timeBuffer, "2025-06-21 %02d:%02d:%02d", 
+    sprintf(timeBuffer, "2025-06-22 %02d:%02d:%02d", 
             (int)((currentTime / 3600) % 24), 
             (int)((currentTime / 60) % 60), 
             (int)(currentTime % 60));
     gpsTimestamp = String(timeBuffer);
-}
-
-void readGPSData() {
-    // Try to read real GPS data first
-    bool realGpsData = false;
-    while (gpsSerial.available() > 0) {
-        if (gps.encode(gpsSerial.read())) {
-            if (gps.location.isValid()) {
-                latitude = gps.location.lat();
-                longitude = gps.location.lng();
-                gpsValid = true;
-                realGpsData = true;
-                useSimulatedGPS = false;
-                
-                // Get additional GPS data
-                if (gps.altitude.isValid()) {
-                    altitude = gps.altitude.meters();
-                }
-                
-                if (gps.speed.isValid()) {
-                    speed_kmh = gps.speed.kmph();
-                }
-                
-                if (gps.satellites.isValid()) {
-                    satellites = gps.satellites.value();
-                }
-                
-                if (gps.time.isValid() && gps.date.isValid()) {
-                    char timeBuffer[32];
-                    sprintf(timeBuffer, "%04d-%02d-%02d %02d:%02d:%02d", 
-                            gps.date.year(), gps.date.month(), gps.date.day(),
-                            gps.time.hour(), gps.time.minute(), gps.time.second());
-                    gpsTimestamp = String(timeBuffer);
-                }
-                
-                Serial.println("=== REAL GPS Data ===");
-                Serial.println("Latitude: " + String(latitude, 6));
-                Serial.println("Longitude: " + String(longitude, 6));
-                Serial.println("Altitude: " + String(altitude, 2) + " m");
-                Serial.println("Speed: " + String(speed_kmh, 2) + " km/h");
-                Serial.println("Satellites: " + String(satellites));
-                Serial.println("Timestamp: " + gpsTimestamp);
-                Serial.println("====================");
-                return;
-            }
-        }
-    }
-    
-    // If no real GPS data and enough time has passed, use simulated GPS
-    if (!realGpsData && millis() > 30000) { // Start simulation after 30 seconds
-        if (!useSimulatedGPS) {
-            Serial.println("=== Starting GPS Simulation ===");
-            Serial.println("Generating random locations within 1000m radius");
-            Serial.println("Base location: San Francisco (" + String(BASE_LATITUDE, 6) + ", " + String(BASE_LONGITUDE, 6) + ")");
-            Serial.println("===============================");
-            useSimulatedGPS = true;
-            generateRandomGPSLocation();
-            lastLocationChange = millis();
-        } else {
-            // Change location every 60 seconds
-            if (millis() - lastLocationChange > 60000) {
-                generateRandomGPSLocation();
-                lastLocationChange = millis();
-                
-                Serial.println("=== SIMULATED GPS Data ===");
-                Serial.println("Latitude: " + String(latitude, 6));
-                Serial.println("Longitude: " + String(longitude, 6));
-                Serial.println("Altitude: " + String(altitude, 2) + " m");
-                Serial.println("Speed: " + String(speed_kmh, 2) + " km/h");
-                Serial.println("Satellites: " + String(satellites));
-                Serial.println("Timestamp: " + gpsTimestamp);
-                Serial.println("Distance from base: ~" + String(random(100, 1001)) + "m");
-                Serial.println("===========================");
-            }
-        }
-    } else if (!realGpsData) {
-        // Still waiting for GPS or simulation to start
-        static unsigned long lastGpsWarning = 0;
-        if (millis() - lastGpsWarning > 10000) { // Show warning every 10 seconds
-            Serial.println("GPS: Waiting for satellite fix or starting simulation...");
-            lastGpsWarning = millis();
-        }
-        gpsValid = false;
-    }
 }
 
 void readSensors() {
@@ -407,15 +512,12 @@ void updateLCD() {
     lcd.clear();
     
     if (gpsValid) {
-        // Show GPS coordinates on LCD when available
+        // Show GPS coordinates and geofence status on LCD
         lcd.setCursor(0, 0);
         lcd.print("GPS: " + String(latitude, 4));
         lcd.setCursor(0, 1);
-        if (useSimulatedGPS) {
-            lcd.print("SIM: " + String(longitude, 4));
-        } else {
-            lcd.print("     " + String(longitude, 4));
-        }
+        String mode = generateInsideGeofence ? "IN" : "OUT";
+        lcd.print(mode + ": " + String(longitude, 4));
     } else {
         // Show sensor data when GPS not available
         lcd.setCursor(0, 0);
@@ -430,6 +532,145 @@ void updateLCD() {
     }
 }
 
+void publishSensorData() {
+    DynamicJsonDocument doc(4096);
+    
+    // Device info
+    doc["device_id"] = device_id;
+    doc["device_name"] = device_name;
+    doc["timestamp"] = gpsTimestamp;
+    
+    // Create sensors array
+    JsonArray sensors = doc.createNestedArray("sensors");
+    
+    // GPS Latitude
+    JsonObject gpsLat = sensors.createNestedObject();
+    gpsLat["sensor_name"] = "GPS Latitude";
+    gpsLat["sensor_type"] = "gps_latitude";
+    gpsLat["value"] = latitude;
+    gpsLat["unit"] = "degrees";
+    gpsLat["accuracy"] = 95;
+    gpsLat["location"] = "Device";
+    gpsLat["enabled"] = true;
+    gpsLat["reading_timestamp"] = gpsTimestamp;
+    
+    // GPS Longitude
+    JsonObject gpsLng = sensors.createNestedObject();
+    gpsLng["sensor_name"] = "GPS Longitude";
+    gpsLng["sensor_type"] = "gps_longitude";
+    gpsLng["value"] = longitude;
+    gpsLng["unit"] = "degrees";
+    gpsLng["accuracy"] = 95;
+    gpsLng["location"] = "Device";
+    gpsLng["enabled"] = true;
+    gpsLng["reading_timestamp"] = gpsTimestamp;
+    
+    // GPS Altitude
+    JsonObject gpsAlt = sensors.createNestedObject();
+    gpsAlt["sensor_name"] = "GPS Altitude";
+    gpsAlt["sensor_type"] = "gps_altitude";
+    gpsAlt["value"] = altitude;
+    gpsAlt["unit"] = "meters";
+    gpsAlt["accuracy"] = 90;
+    gpsAlt["location"] = "Device";
+    gpsAlt["enabled"] = true;
+    gpsAlt["reading_timestamp"] = gpsTimestamp;
+    
+    // Temperature
+    JsonObject temp = sensors.createNestedObject();
+    temp["sensor_name"] = "Temperature";
+    temp["sensor_type"] = "temperature";
+    temp["value"] = temperature;
+    temp["unit"] = "°C";
+    temp["accuracy"] = 98;
+    temp["location"] = "Device";
+    temp["enabled"] = true;
+    temp["reading_timestamp"] = gpsTimestamp;
+    
+    // Humidity
+    JsonObject hum = sensors.createNestedObject();
+    hum["sensor_name"] = "Humidity";
+    hum["sensor_type"] = "humidity";
+    hum["value"] = humidity;
+    hum["unit"] = "%";
+    hum["accuracy"] = 95;
+    hum["location"] = "Device";
+    hum["enabled"] = true;
+    hum["reading_timestamp"] = gpsTimestamp;
+    
+    // Serialize and send
+    String jsonString;
+    serializeJson(doc, jsonString);
+    
+    String dataTopic = "devices/" + device_id + "/sensors";
+    if (client.publish(dataTopic, jsonString, false, 1)) {
+        Serial.println("✓ Sensor data sent successfully");
+        Serial.println("Mode: " + String(generateInsideGeofence ? "INSIDE" : "OUTSIDE") + " Xorafi 1");
+    } else {
+        Serial.println("✗ Failed to send sensor data");
+    }
+}
+
+void publishGPSData() {
+    if (!gpsValid) return;
+    
+    DynamicJsonDocument doc(2048);
+    
+    doc["device_id"] = device_id;
+    doc["timestamp"] = gpsTimestamp;
+    doc["simulated"] = useSimulatedGPS;
+    doc["geofence_mode"] = generateInsideGeofence ? "inside" : "outside";
+    
+    JsonObject location = doc.createNestedObject("location");
+    location["latitude"] = latitude;
+    location["longitude"] = longitude;
+    location["altitude"] = altitude;
+    location["speed_kmh"] = speed_kmh;
+    location["satellites"] = satellites;
+    location["valid"] = gpsValid;
+    
+    String jsonString;
+    serializeJson(doc, jsonString);
+    
+    String gpsTopic = "devices/" + device_id + "/gps";
+    if (client.publish(gpsTopic, jsonString, false, 1)) {
+        String gpsType = useSimulatedGPS ? "SIMULATED" : "REAL";
+        String mode = generateInsideGeofence ? "INSIDE" : "OUTSIDE";
+        Serial.println("✓ " + gpsType + " GPS data published (" + mode + ") - Lat:" + String(latitude, 6) + " Lng:" + String(longitude, 6));
+    } else {
+        Serial.println("✗ Failed to send GPS data");
+    }
+}
+
+void publishDeviceStatus(String status) {
+    DynamicJsonDocument doc(512);
+    
+    doc["device_id"] = device_id;
+    doc["device_name"] = device_name;
+    doc["device_type"] = device_type;
+    doc["status"] = status;
+    doc["enabled"] = true;
+    doc["last_seen"] = gpsTimestamp;
+    doc["wifi_signal"] = WiFi.RSSI();
+    doc["free_memory"] = ESP.getFreeHeap();
+    doc["uptime"] = millis() / 1000;
+    
+    // Add geofence testing info
+    doc["geofence_test_mode"] = testGeofencing;
+    doc["current_mode"] = generateInsideGeofence ? "inside" : "outside";
+    doc["gps_simulated"] = useSimulatedGPS;
+    
+    String jsonString;
+    serializeJson(doc, jsonString);
+    
+    String statusTopic = "devices/" + device_id + "/status";
+    if (client.publish(statusTopic, jsonString, true, 1)) {
+        Serial.println("✓ Status update sent (" + status + ")");
+    } else {
+        Serial.println("✗ Failed to send status update");
+    }
+}
+
 void publishDeviceDiscovery() {
     DynamicJsonDocument doc(4096);
     
@@ -440,6 +681,7 @@ void publishDeviceDiscovery() {
     doc["firmware_version"] = firmware_version;
     doc["mac_address"] = WiFi.macAddress();
     doc["ip_address"] = WiFi.localIP().toString();
+    doc["geofence_testing"] = testGeofencing;
     
     // Sensor Array
     JsonArray sensors = doc.createNestedArray("available_sensors");
@@ -458,44 +700,17 @@ void publishDeviceDiscovery() {
     humSensor["unit"] = "percent";
     humSensor["value"] = round(humidity * 10) / 10.0;
 
-    // Light Sensor
-    JsonObject lightSensor = sensors.createNestedObject();
-    lightSensor["sensor_type"] = "light";
-    lightSensor["sensor_name"] = "Photoresistor Light Level";
-    lightSensor["unit"] = "percent";
-    lightSensor["value"] = lightLevel;
-    
-    // Potentiometer
-    JsonObject potSensor = sensors.createNestedObject();
-    potSensor["sensor_type"] = "potentiometer";
-    potSensor["sensor_name"] = "Potentiometer Value";
-    potSensor["unit"] = "percent";
-    potSensor["value"] = potValue;
-    
-    // WiFi Signal Sensor
-    JsonObject wifiSensor = sensors.createNestedObject();
-    wifiSensor["sensor_type"] = "wifi_signal";
-    wifiSensor["sensor_name"] = "WiFi Signal Strength";
-    wifiSensor["unit"] = "dBm";
-    wifiSensor["value"] = wifiSignal;
-    
-    // Battery Level Sensor
-    JsonObject batterySensor = sensors.createNestedObject();
-    batterySensor["sensor_type"] = "battery";
-    batterySensor["sensor_name"] = "Battery Level";
-    batterySensor["unit"] = "percent";
-    batterySensor["value"] = round(batteryLevel * 10) / 10.0;
-
     // GPS Sensor
     JsonObject gpsSensor = sensors.createNestedObject();
     gpsSensor["sensor_type"] = "gps";
-    gpsSensor["sensor_name"] = useSimulatedGPS ? "Simulated GPS Module" : "NEO-6M GPS Module";
+    gpsSensor["sensor_name"] = "Geofence Testing GPS";
     gpsSensor["unit"] = "coordinates";
     gpsSensor["latitude"] = latitude;
     gpsSensor["longitude"] = longitude;
     gpsSensor["valid"] = gpsValid;
     gpsSensor["simulated"] = useSimulatedGPS;
-
+    gpsSensor["geofence_mode"] = generateInsideGeofence ? "inside" : "outside";
+    
     String jsonString;
     serializeJsonPretty(doc, jsonString);
     
@@ -503,74 +718,7 @@ void publishDeviceDiscovery() {
     client.publish(discoveryTopic, jsonString, false, 1);
     
     Serial.println("=== DEVICE DISCOVERY PUBLISHED ===");
-    Serial.println(jsonString);
-}
-
-void publishSensorData() {
-    DynamicJsonDocument doc(4096);
-    
-    doc["device_id"] = device_id;
-    
-    JsonObject sensors = doc.createNestedObject("sensors");
-    sensors["temperature"] = round(temperature * 10) / 10.0;
-    sensors["humidity"] = round(humidity * 10) / 10.0;
-    sensors["light"] = lightLevel;
-    sensors["potentiometer"] = potValue;
-    sensors["wifi_signal"] = wifiSignal;
-    sensors["battery"] = round(batteryLevel * 10) / 10.0;
-    
-    String jsonString;
-    serializeJson(doc, jsonString);
-    
-    String dataTopic = "devices/" + device_id + "/data";
-    client.publish(dataTopic, jsonString, false, 1);
-    
-    Serial.println("Sensor data published - T:" + String(temperature) + "°C H:" + String(humidity) + "% L:" + String(lightLevel) + "% P:" + String(potValue) + "%");
-}
-
-void publishGPSData() {
-    if (!gpsValid) return;
-    
-    DynamicJsonDocument doc(2048);
-    
-    doc["device_id"] = device_id;
-    doc["timestamp"] = gpsTimestamp;
-    doc["simulated"] = useSimulatedGPS;
-    
-    JsonObject location = doc.createNestedObject("location");
-    location["latitude"] = latitude;
-    location["longitude"] = longitude;
-    location["altitude"] = altitude;
-    location["speed_kmh"] = speed_kmh;
-    location["satellites"] = satellites;
-    location["valid"] = gpsValid;
-    
-    String jsonString;
-    serializeJson(doc, jsonString);
-    
-    String gpsTopic = "devices/" + device_id + "/gps";
-    client.publish(gpsTopic, jsonString, false, 1);
-    
-    String gpsType = useSimulatedGPS ? "SIMULATED" : "REAL";
-    Serial.println(gpsType + " GPS data published - Lat:" + String(latitude, 6) + " Lng:" + String(longitude, 6) + " Alt:" + String(altitude, 2) + "m");
-}
-
-void publishDeviceStatus(String status) {
-    DynamicJsonDocument doc(512);
-    
-    doc["device_id"] = device_id;
-    doc["status"] = status;
-    doc["timestamp"] = millis() / 1000;
-    doc["gps_status"] = gpsValid ? "active" : "searching";
-    doc["gps_simulated"] = useSimulatedGPS;
-    
-    String jsonString;
-    serializeJson(doc, jsonString);
-    
-    String statusTopic = "devices/" + device_id + "/status";
-    client.publish(statusTopic, jsonString, true, 1);
-    
-    Serial.println("Status published: " + status);
+    Serial.println("Geofence Mode: " + String(generateInsideGeofence ? "INSIDE" : "OUTSIDE"));
 }
 
 void publishControlResponse(String control, String value) {

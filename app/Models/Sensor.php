@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Builder;
 use Carbon\Carbon;
+use App\Services\GeofencingService;
 
 class Sensor extends Model
 {
@@ -63,44 +64,10 @@ class Sensor extends Model
     }
 
     // Accessors
-    public function getFormattedValueAttribute()
-    {
-        switch ($this->sensor_type) {
-            case 'gps_latitude':
-            case 'gps_longitude':
-                // GPS coordinates need 6-8 decimal places for accuracy
-                return number_format((float)$this->value, 6, '.', '');
-                
-            case 'gps_altitude':
-            case 'gps_speed':
-                // GPS altitude and speed with 2 decimal places
-                return number_format((float)$this->value, 2, '.', '');
-                
-            case 'temperature':
-                return number_format($this->value, 1) . '°C';
-                
-            case 'humidity':
-            case 'light':
-            case 'battery':
-                return number_format($this->value, 0) . '%';
-                
-            case 'wifi_signal':
-            case 'signal':
-                return number_format($this->value, 0) . ' dBm';
-                
-            default:
-                // For other sensors, use appropriate formatting
-                if (is_numeric($this->value)) {
-                    return number_format((float)$this->value, 2, '.', '');
-                }
-                return $this->value;
-        }
-    }
-
     public function getStatusAttribute(): string
     {
         // For GPS sensors, check geofencing first
-        if ($this->sensor_type === 'gps' && $this->device && $this->device->land) {
+        if (str_starts_with($this->sensor_type, 'gps') && $this->device && $this->device->land) {
             if (!$this->isInsideGeofence()) {
                 return 'critical'; // Outside geofence
             }
@@ -118,7 +85,37 @@ class Sensor extends Model
         return 'normal';
     }
 
-    // Business Logic Methods
+    public function getFormattedValueAttribute()
+    {
+        switch ($this->sensor_type) {
+            case 'gps_latitude':
+            case 'gps_longitude':
+                return number_format((float)$this->value, 6, '.', '');
+                
+            case 'gps_altitude':
+            case 'gps_speed':
+                return number_format((float)$this->value, 2, '.', '');
+                
+            case 'temperature':
+                return number_format($this->value, 1) . '°C';
+                
+            case 'humidity':
+            case 'light':
+            case 'battery':
+                return number_format($this->value, 0) . '%';
+                
+            case 'wifi_signal':
+            case 'signal':
+                return number_format($this->value, 0) . ' dBm';
+                
+            default:
+                if (is_numeric($this->value)) {
+                    return number_format((float)$this->value, 2, '.', '');
+                }
+                return $this->value;
+        }
+    }
+
     public function isWithinThresholds(): bool
     {
         if (!$this->thresholds || $this->value === null) {
@@ -141,94 +138,68 @@ class Sensor extends Model
 
     public function isInsideGeofence(): bool
     {
-        if ($this->sensor_type !== 'gps' || !$this->device || !$this->device->land) {
+        if (!str_starts_with($this->sensor_type, 'gps') || !$this->device || !$this->device->land) {
             return true; // Not applicable
         }
 
         $land = $this->device->land;
-        if (!$land->geojson || !$this->value) {
-            return true; // No geofence data or GPS data
+        
+        // The location field is already an array (Laravel auto-casts it)
+        if (!$land->location) {
+            return false; // No geofence data
         }
 
-        // Parse GPS coordinates from JSON value
-        $gpsData = json_decode($this->value, true);
-        if (!$gpsData || !isset($gpsData['lat']) || !isset($gpsData['lng'])) {
-            return true; // Invalid GPS data
+        // Get GPS coordinates
+        $coordinates = $this->getGpsCoordinates();
+        if (!$coordinates) {
+            return false; // No GPS data available
         }
 
-        return $this->pointInPolygon(
-            $gpsData['lat'], 
-            $gpsData['lng'], 
-            $land->geojson
+        // Location is already an array, no need to json_decode
+        $locationData = $land->location;
+        if (!isset($locationData['geojson'])) {
+            return false;
+        }
+
+        // Extract the geojson from the location data
+        $geojsonData = $locationData['geojson'];
+
+        // Use the GeofencingService
+        $geofencingService = new GeofencingService();
+        return $geofencingService->isPointInsidePolygon(
+            $coordinates['lat'], 
+            $coordinates['lng'], 
+            $geojsonData
         );
     }
 
-    /**
-     * Check if a GPS coordinate is inside a polygon (geofence)
-     */
-    private function pointInPolygon($latitude, $longitude, $polygon)
+    private function getGpsCoordinates(): ?array
     {
-        if (!$polygon || !is_array($polygon)) {
-            return false;
-        }
-
-        $vertices = [];
-
-        // Extract coordinates from GeoJSON polygon
-        if (isset($polygon['features'][0]['geometry']['coordinates'][0])) {
-            $coordinates = $polygon['features'][0]['geometry']['coordinates'][0];
-            foreach ($coordinates as $coord) {
-                $vertices[] = ['lng' => $coord[0], 'lat' => $coord[1]];
-            }
-        } else {
-            return false;
-        }
-
-        return $this->raycastingAlgorithm($latitude, $longitude, $vertices);
-    }
-
-    /**
-     * Ray casting algorithm to determine if point is inside polygon
-     */
-    private function raycastingAlgorithm($lat, $lng, $vertices)
-    {
-        $intersections = 0;
-        $verticesCount = count($vertices);
-
-        for ($i = 1; $i < $verticesCount; $i++) {
-            $vertex1 = $vertices[$i - 1];
-            $vertex2 = $vertices[$i];
-
-            // Check if point is on horizontal boundary
-            if ($vertex1['lat'] == $vertex2['lat'] && 
-                $vertex1['lat'] == $lat && 
-                $lng > min($vertex1['lng'], $vertex2['lng']) && 
-                $lng < max($vertex1['lng'], $vertex2['lng'])) {
-                return true; // On boundary
-            }
-
-            // Ray casting algorithm
-            if ($lat > min($vertex1['lat'], $vertex2['lat']) && 
-                $lat <= max($vertex1['lat'], $vertex2['lat']) && 
-                $lng <= max($vertex1['lng'], $vertex2['lng']) && 
-                $vertex1['lat'] != $vertex2['lat']) {
+        if ($this->sensor_type === 'gps_latitude' || $this->sensor_type === 'gps_longitude') {
+            // Get the most recent GPS sensors from the same device
+            $latSensor = $this->device->sensors()
+                ->where('sensor_type', 'gps_latitude')
+                ->orderBy('reading_timestamp', 'desc')
+                ->orderBy('id', 'desc')
+                ->first();
                 
-                $xinters = ($lat - $vertex1['lat']) * 
-                          ($vertex2['lng'] - $vertex1['lng']) / 
-                          ($vertex2['lat'] - $vertex1['lat']) + $vertex1['lng'];
-
-                if ($xinters == $lng) {
-                    return true; // On boundary
-                }
-
-                if ($vertex1['lng'] == $vertex2['lng'] || $lng <= $xinters) {
-                    $intersections++;
-                }
+            $lngSensor = $this->device->sensors()
+                ->where('sensor_type', 'gps_longitude')
+                ->orderBy('reading_timestamp', 'desc')
+                ->orderBy('id', 'desc')
+                ->first();
+            
+            if (!$latSensor || !$lngSensor || !$latSensor->value || !$lngSensor->value) {
+                return null;
             }
+            
+            return [
+                'lat' => (float)$latSensor->value,
+                'lng' => (float)$lngSensor->value
+            ];
         }
-
-        // Odd number of intersections = inside
-        return ($intersections % 2 != 0);
+        
+        return null;
     }
 
     public function needsCalibration(): bool
@@ -255,7 +226,7 @@ class Sensor extends Model
      */
     public function getGeofenceStatus(): array
     {
-        if ($this->sensor_type !== 'gps') {
+        if (!str_starts_with($this->sensor_type, 'gps')) {
             return ['applicable' => false];
         }
 
@@ -283,7 +254,7 @@ class Sensor extends Model
      */
     public function hasViolations(): bool
     {
-        if ($this->sensor_type === 'gps') {
+        if (str_starts_with($this->sensor_type, 'gps')) {
             return !$this->isInsideGeofence();
         }
 
@@ -295,7 +266,7 @@ class Sensor extends Model
      */
     public function getViolationMessage(): ?string
     {
-        if ($this->sensor_type === 'gps') {
+        if (str_starts_with($this->sensor_type, 'gps')) {
             if (!$this->isInsideGeofence()) {
                 return 'Outside land boundary';
             }

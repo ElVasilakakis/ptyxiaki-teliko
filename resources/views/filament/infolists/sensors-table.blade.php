@@ -1,206 +1,7 @@
-<style>
-.sensor-table {
-    width: 100%;
-    border-collapse: collapse;
-    overflow-x: auto;
-}
+@push('styles')
+<link rel="stylesheet" href="{{ asset('sensor-table.css') }}">
+@endpush
 
-.sensor-table-container {
-    overflow-x: auto;
-}
-
-.sensor-table th,
-.sensor-table td {
-    padding: 12px 16px;
-    text-align: left;
-    border-bottom: 1px solid #e5e7eb;
-}
-
-.sensor-table th {
-    background-color: #f9fafb;
-    font-size: 12px;
-    font-weight: 500;
-    color: #6b7280;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-.sensor-table tr:hover {
-    background-color: #f9fafb;
-}
-
-.sensor-table tr.critical-row {
-    background-color: #fef2f2;
-}
-
-.sensor-table td {
-    font-size: 14px;
-    color: #111827;
-}
-
-.badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 10px;
-    border-radius: 9999px;
-    font-size: 12px;
-    font-weight: 500;
-}
-
-.badge-green {
-    background-color: #dcfce7;
-    color: #166534;
-}
-
-.badge-yellow {
-    background-color: #fef3c7;
-    color: #92400e;
-}
-
-.badge-red {
-    background-color: #fee2e2;
-    color: #991b1b;
-}
-
-.badge-blue {
-    background-color: #dbeafe;
-    color: #1e40af;
-}
-
-.badge-purple {
-    background-color: #e9d5ff;
-    color: #7c2d12;
-}
-
-.badge-indigo {
-    background-color: #e0e7ff;
-    color: #3730a3;
-}
-
-.badge-gray {
-    background-color: #f3f4f6;
-    color: #374151;
-}
-
-.sensor-name {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 500;
-}
-
-.warning-icon {
-    width: 16px;
-    height: 16px;
-    color: #ef4444;
-}
-
-.info-icon {
-    width: 16px;
-    height: 16px;
-    color: #eab308;
-}
-
-.status-container {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.threshold-message {
-    font-size: 12px;
-    color: #dc2626;
-}
-
-.threshold-info {
-    font-size: 12px;
-}
-
-.threshold-info div {
-    color: #6b7280;
-}
-
-.active-icon {
-    width: 20px;
-    height: 20px;
-}
-
-.active-icon.green {
-    color: #10b981;
-}
-
-.active-icon.red {
-    color: #ef4444;
-}
-
-.no-sensors {
-    text-align: center;
-    padding: 32px;
-    color: #6b7280;
-}
-
-@media (prefers-color-scheme: dark) {
-    .sensor-table th {
-        background-color: #1f2937;
-        color: #9ca3af;
-    }
-    
-    .sensor-table tr:hover {
-        background-color: #1f2937;
-    }
-    
-    .sensor-table tr.critical-row {
-        background-color: #7f1d1d;
-    }
-    
-    .sensor-table td {
-        color: #f9fafb;
-    }
-    
-    .badge-green {
-        background-color: #14532d;
-        color: #bbf7d0;
-    }
-    
-    .badge-yellow {
-        background-color: #78350f;
-        color: #fde68a;
-    }
-    
-    .badge-red {
-        background-color: #7f1d1d;
-        color: #fecaca;
-    }
-    
-    .badge-blue {
-        background-color: #1e3a8a;
-        color: #bfdbfe;
-    }
-    
-    .badge-purple {
-        background-color: #581c87;
-        color: #ddd6fe;
-    }
-    
-    .badge-indigo {
-        background-color: #312e81;
-        color: #c7d2fe;
-    }
-    
-    .badge-gray {
-        background-color: #1f2937;
-        color: #d1d5db;
-    }
-    
-    .threshold-info div {
-        color: #9ca3af;
-    }
-    
-    .no-sensors {
-        color: #9ca3af;
-    }
-}
-</style>
 
 <div class="sensor-table-container">
     @if($getRecord()->sensors && $getRecord()->sensors->count() > 0)
@@ -221,9 +22,11 @@
             </thead>
             <tbody>
                 @foreach($getRecord()->sensors as $sensor)
+                
                     @php
-                        // Check if sensor needs thresholds (non-GPS sensors only)
-                        $needsThresholds = $sensor->sensor_type !== 'gps';
+                        // Check if sensor is GPS-related (any GPS sensor type)
+                        $isGpsSensor = str_starts_with($sensor->sensor_type, 'gps');
+                        $needsThresholds = !$isGpsSensor;
                         $thresholds = $sensor->thresholds;
                         $hasThresholds = $thresholds && is_array($thresholds) && (isset($thresholds['min']) || isset($thresholds['max']));
                         $isOutOfThreshold = false;
@@ -233,10 +36,14 @@
                         $isOutsideGeofence = false;
                         $geofenceMessage = '';
                         
-                        if ($sensor->sensor_type === 'gps') {
-                            $isOutsideGeofence = !$sensor->isInsideGeofence();
-                            if ($isOutsideGeofence) {
-                                $geofenceMessage = "Outside land boundary";
+                        if ($isGpsSensor) {
+                            // For GPS sensors, check if device has land and coordinates are outside
+                            if ($sensor->device && $sensor->device->land) {
+                                // Check if this specific GPS sensor has coordinates that are outside geofence
+                                $isOutsideGeofence = !$sensor->isInsideGeofence();
+                                if ($isOutsideGeofence) {
+                                    $geofenceMessage = "Outside land boundary";
+                                }
                             }
                         } else {
                             // For non-GPS sensors, check thresholds
@@ -289,10 +96,9 @@
                             'temperature' => 'badge-green',
                             'humidity' => 'badge-blue',
                             'light' => 'badge-yellow',
-                            'signal' => 'badge-red',
+                            'signal', 'wifi_signal' => 'badge-red',
                             'battery' => 'badge-purple',
-                            'gps' => 'badge-indigo',
-                            default => 'badge-gray'
+                            default => str_starts_with($sensor->sensor_type, 'gps') ? 'badge-indigo' : 'badge-gray'
                         };
                     @endphp
                     
@@ -313,12 +119,12 @@
                         </td>
                         <td>
                             <span class="badge {{ $typeColor }}">
-                                {{ ucfirst($sensor->sensor_type) }}
+                                {{ ucfirst(str_replace('_', ' ', $sensor->sensor_type)) }}
                             </span>
                         </td>
                         <td>
                             <span class="badge {{ $statusColor }}">
-                                @if($sensor->sensor_type === 'gps')
+                                @if($isGpsSensor)
                                     @php
                                         $gpsData = json_decode($sensor->value, true);
                                     @endphp
@@ -349,7 +155,7 @@
                             </div>
                         </td>
                         <td>
-                            @if($sensor->sensor_type === 'gps')
+                            @if($isGpsSensor)
                                 @if($sensor->device && $sensor->device->land)
                                     <div class="threshold-info">
                                         <div>Geofence: {{ $sensor->device->land->land_name }}</div>
