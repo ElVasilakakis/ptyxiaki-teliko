@@ -91,19 +91,6 @@ class ViewDevice extends ViewRecord
                             }),
                     ])->columns(3),
 
-                // Technical Details
-                Infolists\Components\Section::make('Technical Details')
-                    ->schema([
-                        Infolists\Components\KeyValueEntry::make('application_data')
-                            ->label('Device Information')
-                            ->keyLabel('Property')
-                            ->valueLabel('Value'),
-                        Infolists\Components\KeyValueEntry::make('status_details')
-                            ->label('Status Details')
-                            ->keyLabel('Metric')
-                            ->valueLabel('Value'),
-                    ])->columns(1),
-
                 // MQTT Configuration
                 Infolists\Components\Section::make('MQTT Configuration')
                     ->schema([
@@ -120,62 +107,14 @@ class ViewDevice extends ViewRecord
                     ])->columns(3),
 
                 // Sensors Information
-                // Sensors Information
-                Infolists\Components\Section::make('Connected Sensors')
-                    ->extraAttributes(['wire:poll.5s' => '']) // Add this line for 5-second polling
+               Infolists\Components\Section::make('Connected Sensors')
+                    ->extraAttributes(['wire:poll.5s' => '']) // Keep your 5-second polling
                     ->schema([
-                        Infolists\Components\RepeatableEntry::make('sensors')
-                            ->schema([
-                                Infolists\Components\TextEntry::make('sensor_name')
-                                    ->label('Sensor Name')
-                                    ->weight('bold'),
-                                Infolists\Components\TextEntry::make('sensor_type')
-                                    ->label('Type')
-                                    ->badge()
-                                    ->color(fn (string $state): string => match ($state) {
-                                        'temperature' => 'success',
-                                        'humidity' => 'info',
-                                        'light' => 'warning',
-                                        'signal' => 'danger',
-                                        'battery' => 'primary',
-                                        default => 'gray',
-                                    }),
-                                Infolists\Components\TextEntry::make('formatted_value')
-                                    ->label('Current Value')
-                                    ->badge()
-                                    ->color(fn ($record): string => match ($record->status) {
-                                        'normal' => 'success',
-                                        'warning' => 'warning',
-                                        'critical' => 'danger',
-                                        default => 'gray',
-                                    }),
-                                Infolists\Components\TextEntry::make('status')
-                                    ->label('Status')
-                                    ->badge()
-                                    ->color(fn (string $state): string => match ($state) {
-                                        'normal' => 'success',
-                                        'warning' => 'warning',
-                                        'critical' => 'danger',
-                                        default => 'gray',
-                                    }),
-                                Infolists\Components\TextEntry::make('reading_timestamp')
-                                    ->label('Last Reading')
-                                    ->dateTime()
-                                    ->since(),
-                                Infolists\Components\IconEntry::make('enabled')
-                                    ->label('Active')
-                                    ->boolean(),
-                                Infolists\Components\TextEntry::make('location')
-                                    ->label('Location'),
-                                Infolists\Components\TextEntry::make('unit')
-                                    ->label('Unit'),
-                                Infolists\Components\TextEntry::make('accuracy')
-                                    ->label('Accuracy')
-                                    ->suffix('%'),
-                            ])
-                            ->columns(4)
-                            ->grid(2),
+                        Infolists\Components\ViewEntry::make('sensors')
+                            ->view('filament.infolists.sensors-table')
+                            ->columnSpanFull(),
                     ]),
+
 
                 // Device Notes
                 Infolists\Components\Section::make('Additional Information')
