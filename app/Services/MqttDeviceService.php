@@ -25,10 +25,9 @@ class MqttDeviceService
             $mqtt->subscribe('devices/+/discovery/response', \Closure::fromCallable([$this, 'handleDeviceDiscovery']), $this->qos);
             $mqtt->subscribe('devices/+/data', \Closure::fromCallable([$this, 'handleDeviceData']), $this->qos);
             $mqtt->subscribe('devices/+/status', \Closure::fromCallable([$this, 'handleDeviceStatus']), $this->qos);
-            $mqtt->subscribe('devices/+/gps', \Closure::fromCallable([$this, 'handleDeviceGPS']), $this->qos); // GPS topic
+            $mqtt->subscribe('devices/+/gps', \Closure::fromCallable([$this, 'handleDeviceGPS']), $this->qos);
             $mqtt->subscribe('devices/discover/all', \Closure::fromCallable([$this, 'handleGlobalDiscovery']), $this->qos);
 
-            Log::info('MQTT subscriber started and listening for device messages.');
             $mqtt->loop(true);
 
         } catch (\Exception $e) {
@@ -53,12 +52,6 @@ class MqttDeviceService
 
             $mqtt = MQTT::connection();
             $mqtt->publish($topic, $payload, $this->qos);
-
-            Log::info('Device command published', [
-                'device_id' => $deviceId,
-                'command' => $command,
-                'topic' => $topic
-            ]);
 
             return true;
 
@@ -94,11 +87,6 @@ class MqttDeviceService
             $mqtt = MQTT::connection();
             $mqtt->publish($topic, $payload, $this->qos);
 
-            Log::info('Device discovery request published', [
-                'device_id' => $deviceId,
-                'topic' => $topic
-            ]);
-
             return true;
 
         } catch (\Exception $e) {
@@ -115,7 +103,6 @@ class MqttDeviceService
         try {
             $data = json_decode($message, true);
             if (!$data || !isset($data['device_id'])) {
-                Log::warning('Received discovery message with invalid format.', ['topic' => $topic]);
                 return;
             }
 
@@ -138,7 +125,6 @@ class MqttDeviceService
             }
 
             cache()->forget("mqtt_user_context");
-            Log::info("Device processed successfully from discovery.", ['device_id' => $device->device_unique_id]);
 
         } catch (\Exception $e) {
             Log::error('Error processing device discovery.', ['topic' => $topic, 'exception' => $e->getMessage()]);
@@ -155,7 +141,6 @@ class MqttDeviceService
             
             $device = Device::where('device_unique_id', $data['device_id'])->first();
             if (!$device) {
-                Log::debug('Data received for unknown device', ['device_id' => $data['device_id']]);
                 return;
             }
 
@@ -188,11 +173,6 @@ class MqttDeviceService
                 'last_seen_at' => now(),
             ]);
 
-            Log::debug('Device status updated', [
-                'device_id' => $device->device_unique_id,
-                'status' => $data['status']
-            ]);
-
         } catch (\Exception $e) {
             Log::error('Error processing device status.', ['topic' => $topic, 'exception' => $e->getMessage()]);
         }
@@ -206,13 +186,11 @@ class MqttDeviceService
         try {
             $data = json_decode($message, true);
             if (!$data || !isset($data['device_id'])) {
-                Log::warning('Received GPS message with invalid format.', ['topic' => $topic]);
                 return;
             }
 
             $device = Device::where('device_unique_id', $data['device_id'])->first();
             if (!$device) {
-                Log::debug('GPS data received for unknown device', ['device_id' => $data['device_id']]);
                 return;
             }
 
@@ -223,12 +201,6 @@ class MqttDeviceService
             if (isset($data['location']) && is_array($data['location'])) {
                 $this->storeGPSAsSensorData($device, $data['location'], $data['timestamp'] ?? null);
             }
-
-            Log::debug('GPS sensor data processed', [
-                'device_id' => $device->device_unique_id,
-                'latitude' => $data['location']['latitude'] ?? null,
-                'longitude' => $data['location']['longitude'] ?? null
-            ]);
 
         } catch (\Exception $e) {
             Log::error('Error processing device GPS sensor data.', ['topic' => $topic, 'exception' => $e->getMessage()]);
@@ -292,12 +264,6 @@ class MqttDeviceService
                             'reading_timestamp' => $readingTimestamp,
                             'enabled' => true,
                         ]);
-                        
-                        Log::debug('GPS sensor created', [
-                            'device_id' => $device->device_unique_id,
-                            'sensor_type' => $sensorType,
-                            'sensor_id' => $sensor->id
-                        ]);
                     } else {
                         // Update existing sensor
                         $sensor->update([
@@ -305,12 +271,6 @@ class MqttDeviceService
                             'reading_timestamp' => $readingTimestamp
                         ]);
                     }
-
-                    Log::debug('GPS sensor updated', [
-                        'device_id' => $device->device_unique_id,
-                        'sensor_type' => $sensorType,
-                        'value' => $sensorConfig['value']
-                    ]);
                 }
             }
 
@@ -346,12 +306,6 @@ class MqttDeviceService
                     'enabled' => true,
                 ]
             );
-
-            Log::debug('Sensor synced', [
-                'device_id' => $device->device_unique_id,
-                'sensor_type' => $sensorData['sensor_type'],
-                'sensor_id' => $sensor->id
-            ]);
         }
     }
 
@@ -380,12 +334,6 @@ class MqttDeviceService
                     'enabled' => true,
                 ]
             );
-
-            Log::debug('GPS sensor synced from discovery', [
-                'device_id' => $device->device_unique_id,
-                'sensor_type' => $sensorType,
-                'sensor_id' => $sensor->id
-            ]);
         }
     }
 
@@ -428,12 +376,6 @@ class MqttDeviceService
                         'value' => $value,
                         'reading_timestamp' => now(),
                         'enabled' => true,
-                    ]);
-
-                    Log::info('Auto-created missing sensor', [
-                        'device_id' => $device->device_unique_id,
-                        'sensor_type' => $sensorType,
-                        'sensor_id' => $sensor->id
                     ]);
                 } else {
                     $sensor->update([
@@ -480,8 +422,6 @@ class MqttDeviceService
     
     public function handleGlobalDiscovery(string $topic, string $message)
     {
-        Log::info("Global discovery request received via MQTT.");
-        
         // Optionally broadcast discovery to all known devices
         $devices = Device::where('enabled', true)->get();
         foreach ($devices as $device) {

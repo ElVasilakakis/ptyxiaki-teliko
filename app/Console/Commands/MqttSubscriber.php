@@ -14,14 +14,6 @@ class MqttSubscriber extends Command
     
     public function handle()
     {
-        $this->info('Starting MQTT subscriber for IoT device management...');
-        $this->info('MQTT Broker: ' . env('MQTT_HOST') . ':' . env('MQTT_PORT'));
-        $this->info('Client ID: ' . env('MQTT_CLIENT_ID'));
-        
-        if ($this->option('debug')) {
-            $this->info('🔍 Debug mode enabled - will show all received messages');
-        }
-        
         // Log startup to MQTT channel
         Log::channel('mqtt')->info('MQTT subscriber service starting', [
             'broker' => env('MQTT_HOST') . ':' . env('MQTT_PORT'),
@@ -33,23 +25,10 @@ class MqttSubscriber extends Command
         try {
             // Test MQTT connection first
             $mqtt = MQTT::connection();
-            $this->info('✓ Successfully connected to MQTT broker');
             Log::channel('mqtt')->info('MQTT connection successful');
             
             // Create service and subscribe to topics
             $service = new MqttDeviceService();
-            
-            // Subscribe to topics with debug output
-            $this->info('📡 Subscribing to device topics...');
-            $this->newLine();
-            $this->info('Listening for:');
-            $this->line('  • devices/+/discovery/response (Device registration)');
-            $this->line('  • devices/+/data (Sensor data)');
-            $this->line('  • devices/+/status (Device status)');
-            $this->line('  • devices/+/gps (GPS sensor data)');
-            $this->line('  • devices/+/control/response (Control responses)');
-            $this->line('  • devices/discover/all (Global discovery)');
-            $this->newLine();
             
             // Start subscription with debug callback
             $this->subscribeWithDebug($service);
@@ -144,13 +123,6 @@ class MqttSubscriber extends Command
             $service->handleGlobalDiscovery($topic, $message);
         });
         
-        $this->info('🚀 MQTT subscriber running. Press Ctrl+C to stop.');
-        $this->info('💡 Use --debug flag to see real-time message details');
-        $this->newLine();
-        
-        // Show statistics periodically
-        $this->showStatistics();
-        
         // Start the loop
         $mqtt->loop(true);
     }
@@ -174,10 +146,6 @@ class MqttSubscriber extends Command
     private function showStatistics()
     {
         // This could be enhanced to show real statistics
-        $this->info('📈 MQTT Subscriber Statistics:');
-        $this->line('   • Service started at: ' . now()->format('Y-m-d H:i:s'));
-        $this->line('   • Monitoring 6 topic patterns');
-        $this->line('   • GPS tracking: Enabled');
-        $this->newLine();
+        // Removed non-debug info logs
     }
 }
