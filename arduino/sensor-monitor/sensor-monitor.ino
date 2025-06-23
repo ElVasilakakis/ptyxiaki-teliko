@@ -602,7 +602,7 @@ void publishSensorData() {
     String jsonString;
     serializeJson(doc, jsonString);
     
-    String dataTopic = "devices/" + device_id + "/sensors";
+    String dataTopic = "devices/" + device_id + "/data";
     if (client.publish(dataTopic, jsonString, false, 1)) {
         Serial.println("✓ Sensor data sent successfully");
         Serial.println("Mode: " + String(generateInsideGeofence ? "INSIDE" : "OUTSIDE") + " Xorafi 1");

@@ -147,14 +147,64 @@ class MqttDeviceService
             $device->update(['status' => 'online', 'last_seen_at' => now()]);
 
             if (isset($data['sensors']) && is_array($data['sensors'])) {
-                $this->updateSensorReadings($device, $data['sensors']);
+                // Check if sensors is an array of objects (Arduino format)
+                if (isset($data['sensors'][0]) && is_array($data['sensors'][0])) {
+                    $this->updateSensorReadingsFromArray($device, $data['sensors']);
+                } else {
+                    // Handle the key-value format
+                    $this->updateSensorReadings($device, $data['sensors']);
+                }
             }
 
         } catch (\Exception $e) {
             Log::error('Error processing device data.', ['topic' => $topic, 'exception' => $e->getMessage()]);
         }
     }
-    
+
+    private function updateSensorReadingsFromArray(Device $device, array $sensorsArray)
+    {
+        foreach ($sensorsArray as $sensorData) {
+            try {
+                if (!isset($sensorData['sensor_type']) || !isset($sensorData['value'])) {
+                    continue;
+                }
+
+                $sensorType = $sensorData['sensor_type'];
+                $value = $sensorData['value'];
+                
+                $sensor = $device->sensors()->where('sensor_type', $sensorType)->first();
+
+                if (!$sensor) {
+                    // Auto-create missing sensors
+                    $sensor = Sensor::create([
+                        'device_id' => $device->id,
+                        'sensor_type' => $sensorType,
+                        'sensor_name' => $sensorData['sensor_name'] ?? ucfirst(str_replace('_', ' ', $sensorType)),
+                        'unit' => $sensorData['unit'] ?? $this->guessUnit($sensorType),
+                        'value' => $value,
+                        'reading_timestamp' => isset($sensorData['reading_timestamp']) ? 
+                            Carbon::parse($sensorData['reading_timestamp']) : now(),
+                        'enabled' => $sensorData['enabled'] ?? true,
+                    ]);
+                } else {
+                    $sensor->update([
+                        'value' => $value + ($sensor->calibration_offset ?? 0),
+                        'reading_timestamp' => isset($sensorData['reading_timestamp']) ? 
+                            Carbon::parse($sensorData['reading_timestamp']) : now()
+                    ]);
+                }
+
+            } catch (\Exception $e) {
+                Log::error('Error updating sensor reading from array.', [
+                    'device_id' => $device->device_unique_id,
+                    'sensor_data' => $sensorData,
+                    'exception' => $e->getMessage()
+                ]);
+            }
+        }
+    }
+
+
     public function handleDeviceStatus(string $topic, string $message)
     {
         try {
