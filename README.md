@@ -5,3 +5,5 @@ php artisan mqtt:subscribe --debug
 php artisan mqtt:listen --verbose
 
 ./runall.bat
+
+php artisan icons:cache
