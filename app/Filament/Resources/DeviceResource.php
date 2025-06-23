@@ -6,6 +6,7 @@ use App\Filament\Resources\DeviceResource\Pages;
 use App\Models\Device;
 use App\Models\Land;
 use App\Models\Sensor;
+use App\Models\MqttBroker;
 use App\Services\MqttDeviceService;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -72,6 +73,26 @@ class DeviceResource extends Resource
                             ->maxLength(1000)
                             ->nullable(),
                     ])->columns(2),
+
+                Forms\Components\Section::make('MQTT Configuration')
+                    ->schema([
+                        Forms\Components\Select::make('mqtt_broker_id')
+                            ->label('MQTT Broker')
+                            ->options(MqttBroker::active()->pluck('name', 'id'))
+                            ->searchable()
+                            ->nullable()
+                            ->placeholder('Use default broker')
+                            ->helperText('Leave empty to use the default MQTT broker'),
+                        
+                        Forms\Components\KeyValue::make('mqtt_topics_config')
+                            ->label('Custom MQTT Topics')
+                            ->keyLabel('Topic Name')
+                            ->valueLabel('Topic Path')
+                            ->nullable()
+                            ->helperText('Override default topics or add custom ones')
+                            ->columnSpanFull(),
+                    ])->columns(2)
+                    ->collapsible(),
                     
                 Forms\Components\Section::make('Device Status')
                     ->schema([
@@ -90,18 +111,59 @@ class DeviceResource extends Resource
                         Forms\Components\TextInput::make('mac_address')
                             ->disabled(),
                     ])->columns(3)
-                    ->visibleOn('edit'),
+                    ->hiddenOn('create'),
+
+                Forms\Components\Section::make('MQTT Information')
+                    ->schema([
+                        Forms\Components\Placeholder::make('mqtt_broker_info')
+                            ->label('MQTT Broker')
+                            ->content(function (?Device $record): string {
+                                if (!$record) {
+                                    return 'Device not loaded';
+                                }
+                                
+                                return $record->effective_mqtt_broker 
+                                    ? $record->effective_mqtt_broker->name . ' (' . $record->effective_mqtt_broker->connection_string . ')'
+                                    : 'No broker assigned';
+                            }),
+                        Forms\Components\Placeholder::make('mqtt_client_id')
+                            ->label('MQTT Client ID')
+                            ->content(function (?Device $record): string {
+                                if (!$record) {
+                                    return 'Not available';
+                                }
+                                
+                                return $record->mqtt_client_id ?? 'Not generated';
+                            }),
+                        Forms\Components\KeyValue::make('mqtt_topics_display')
+                            ->label('MQTT Topics')
+                            ->disabled()
+                            ->addable(false)
+                            ->deletable(false)
+                            ->editableKeys(false)
+                            ->editableValues(false)
+                            ->default(function (?Device $record): array {
+                                if (!$record) {
+                                    return [];
+                                }
+                                
+                                return $record->mqtt_topics ?? [];
+                            })
+                            ->columnSpanFull(),
+                    ])->columns(2)
+                    ->hiddenOn('create'),
                     
                 Forms\Components\Section::make('Device Data')
                     ->schema([
                         Forms\Components\KeyValue::make('application_data')
                             ->label('Device Information')
-                            ->disabled(),
-                        Forms\Components\KeyValue::make('status_details')
-                            ->label('Status Details')
-                            ->disabled(),
+                            ->disabled()
+                            ->addable(false)
+                            ->deletable(false)
+                            ->editableKeys(false)
+                            ->editableValues(false),
                     ])->columns(1)
-                    ->visibleOn('edit'),
+                    ->hiddenOn('create'),
             ]);
     }
 
@@ -131,6 +193,12 @@ class DeviceResource extends Resource
                     ->searchable()
                     ->sortable()
                     ->toggleable(),
+                Tables\Columns\TextColumn::make('mqttBroker.name')
+                    ->label('MQTT Broker')
+                    ->searchable()
+                    ->sortable()
+                    ->toggleable()
+                    ->placeholder('Default'),
                 Tables\Columns\BadgeColumn::make('status')
                     ->colors([
                         'success' => 'online',
@@ -183,6 +251,9 @@ class DeviceResource extends Resource
                 Tables\Filters\SelectFilter::make('land_id')
                     ->relationship('land', 'land_name')
                     ->label('Land'),
+                Tables\Filters\SelectFilter::make('mqtt_broker_id')
+                    ->relationship('mqttBroker', 'name')
+                    ->label('MQTT Broker'),
                 Tables\Filters\TernaryFilter::make('enabled')
                     ->label('Enabled'),
             ])
@@ -192,18 +263,20 @@ class DeviceResource extends Resource
                     ->icon('heroicon-o-magnifying-glass')
                     ->action(function (Device $record) {
                         try {
-                            // Store current user in session/cache for MQTT service
                             cache()->put("mqtt_user_context", auth()->id(), now()->addMinutes(5));
                             
-                            // Log the discovery attempt
                             \Illuminate\Support\Facades\Log::channel('mqtt')->info("Manual device discovery initiated", [
                                 'device_id' => $record->device_unique_id,
                                 'user_id' => auth()->id(),
-                                'from_filament' => true
+                                'from_filament' => true,
+                                'mqtt_broker' => $record->effective_mqtt_broker?->name ?? 'default'
                             ]);
                             
+                            $topics = $record->mqtt_topics;
+                            $discoveryTopic = $topics['discovery_request'] ?? "devices/{$record->device_unique_id}/discover";
+                            
                             $mqtt = \PhpMqtt\Client\Facades\MQTT::connection();
-                            $mqtt->publish("devices/{$record->device_unique_id}/discover", 'discover');
+                            $mqtt->publish($discoveryTopic, 'discover');
                             
                             Notification::make()
                                 ->title('Discovery request sent')
@@ -233,6 +306,8 @@ class DeviceResource extends Resource
                                 'led' => 'Toggle LED',
                                 'reset' => 'Reset Device',
                                 'config' => 'Update Config',
+                                'status' => 'Request Status',
+                                'gps' => 'Request GPS Data',
                             ])
                             ->required(),
                         Forms\Components\TextInput::make('value')
@@ -241,12 +316,18 @@ class DeviceResource extends Resource
                     ])
                     ->action(function (Device $record, array $data) {
                         try {
-                            $service = new MqttDeviceService();
-                            $service->publishDeviceCommand(
-                                $record->device_unique_id,
-                                $data['command'],
-                                ['value' => $data['value'] ?? '']
-                            );
+                            $topics = $record->mqtt_topics;
+                            $commandTopic = $topics['commands'] ?? "devices/{$record->device_unique_id}/commands";
+                            
+                            $message = [
+                                'command' => $data['command'],
+                                'payload' => ['value' => $data['value'] ?? ''],
+                                'timestamp' => now()->toISOString(),
+                                'device_id' => $record->device_unique_id,
+                            ];
+                            
+                            $mqtt = \PhpMqtt\Client\Facades\MQTT::connection();
+                            $mqtt->publish($commandTopic, json_encode($message));
                             
                             Notification::make()
                                 ->title('Command sent')
@@ -261,6 +342,36 @@ class DeviceResource extends Resource
                                 ->send();
                         }
                     }),
+
+                Tables\Actions\Action::make('assign_broker')
+                    ->label('Assign MQTT Broker')
+                    ->icon('heroicon-o-wifi')
+                    ->form([
+                        Forms\Components\Select::make('mqtt_broker_id')
+                            ->label('MQTT Broker')
+                            ->options(MqttBroker::active()->pluck('name', 'id'))
+                            ->required()
+                            ->searchable(),
+                    ])
+                    ->action(function (Device $record, array $data) {
+                        try {
+                            $broker = MqttBroker::find($data['mqtt_broker_id']);
+                            $record->assignToMqttBroker($broker, $record->device_unique_id);
+                            
+                            Notification::make()
+                                ->title('MQTT Broker assigned')
+                                ->body("Device {$record->name} assigned to broker: {$broker->name}")
+                                ->success()
+                                ->send();
+                        } catch (\Exception $e) {
+                            Notification::make()
+                                ->title('Assignment failed')
+                                ->body('Error: ' . $e->getMessage())
+                                ->danger()
+                                ->send();
+                        }
+                    }),
+
                 Tables\Actions\ViewAction::make(),
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
@@ -271,7 +382,6 @@ class DeviceResource extends Resource
                     ->icon('heroicon-o-magnifying-glass')
                     ->action(function () {
                         try {
-                            // Store current user context
                             cache()->put("mqtt_user_context", auth()->id(), now()->addMinutes(5));
                             
                             \Illuminate\Support\Facades\Log::channel('mqtt')->info("Global device discovery initiated", [
@@ -279,8 +389,8 @@ class DeviceResource extends Resource
                                 'from_filament' => true
                             ]);
                             
-                            $service = new MqttDeviceService();
-                            $service->discoverAllDevices();
+                            $mqtt = \PhpMqtt\Client\Facades\MQTT::connection();
+                            $mqtt->publish('devices/discover/all', 'discover');
                             
                             Notification::make()
                                 ->title('Global discovery request sent')
@@ -308,9 +418,13 @@ class DeviceResource extends Resource
                         try {
                             $mqtt = \PhpMqtt\Client\Facades\MQTT::connection();
                             
+                            $activeBrokers = MqttBroker::active()->count();
+                            $devicesWithBrokers = Device::whereNotNull('mqtt_broker_id')->count();
+                            $totalDevices = Device::count();
+                            
                             Notification::make()
                                 ->title('MQTT Connection Active')
-                                ->body('Successfully connected to MQTT broker')
+                                ->body("Active brokers: {$activeBrokers} | Devices with brokers: {$devicesWithBrokers}/{$totalDevices}")
                                 ->success()
                                 ->send();
                         } catch (\Exception $e) {
@@ -331,18 +445,58 @@ class DeviceResource extends Resource
                         ->label('Discover Selected')
                         ->icon('heroicon-o-magnifying-glass')
                         ->action(function ($records) {
-                            $service = new MqttDeviceService();
-                            $mqtt = \PhpMqtt\Client\Facades\MQTT::connection();
-                            
-                            foreach ($records as $record) {
-                                $mqtt->publish("devices/{$record->device_unique_id}/discover", 'discover');
+                            try {
+                                $mqtt = \PhpMqtt\Client\Facades\MQTT::connection();
+                                
+                                foreach ($records as $record) {
+                                    $topics = $record->mqtt_topics;
+                                    $discoveryTopic = $topics['discovery_request'] ?? "devices/{$record->device_unique_id}/discover";
+                                    $mqtt->publish($discoveryTopic, 'discover');
+                                }
+                                
+                                Notification::make()
+                                    ->title('Discovery requests sent')
+                                    ->body('Sent discovery requests to ' . count($records) . ' devices')
+                                    ->success()
+                                    ->send();
+                            } catch (\Exception $e) {
+                                Notification::make()
+                                    ->title('Bulk discovery failed')
+                                    ->body('Error: ' . $e->getMessage())
+                                    ->danger()
+                                    ->send();
                             }
-                            
-                            Notification::make()
-                                ->title('Discovery requests sent')
-                                ->body('Sent discovery requests to ' . count($records) . ' devices')
-                                ->success()
-                                ->send();
+                        }),
+                    Tables\Actions\BulkAction::make('bulk_assign_broker')
+                        ->label('Assign MQTT Broker')
+                        ->icon('heroicon-o-wifi')
+                        ->form([
+                            Forms\Components\Select::make('mqtt_broker_id')
+                                ->label('MQTT Broker')
+                                ->options(MqttBroker::active()->pluck('name', 'id'))
+                                ->required()
+                                ->searchable(),
+                        ])
+                        ->action(function ($records, array $data) {
+                            try {
+                                $broker = MqttBroker::find($data['mqtt_broker_id']);
+                                
+                                foreach ($records as $record) {
+                                    $record->assignToMqttBroker($broker, $record->device_unique_id);
+                                }
+                                
+                                Notification::make()
+                                    ->title('MQTT Broker assigned')
+                                    ->body('Assigned ' . count($records) . " devices to broker: {$broker->name}")
+                                    ->success()
+                                    ->send();
+                            } catch (\Exception $e) {
+                                Notification::make()
+                                    ->title('Bulk assignment failed')
+                                    ->body('Error: ' . $e->getMessage())
+                                    ->danger()
+                                    ->send();
+                            }
                         }),
                 ]),
             ]);
@@ -351,7 +505,7 @@ class DeviceResource extends Resource
     public static function getRelations(): array
     {
         return [
-            // Add sensor relation resource here if needed
+            //
         ];
     }
 

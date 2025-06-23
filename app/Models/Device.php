@@ -11,6 +11,8 @@ use Illuminate\Database\Eloquent\Builder;
 use Carbon\Carbon;
 use App\Models\Sensor;
 use App\Models\User;
+use App\Models\Land;
+use App\Models\MqttBroker;
 
 class Device extends Model
 {
@@ -50,6 +52,8 @@ class Device extends Model
         'land_id',
         'notes',
         'application_data',
+        'mqtt_broker_id',
+        'mqtt_topics_config',
     ];
 
     protected $casts = [
@@ -67,6 +71,8 @@ class Device extends Model
         'flash_size' => 'integer',
         'application_data' => 'json',
         'last_seen_at' => 'datetime',
+        // MQTT casts
+        'mqtt_topics_config' => 'json',
     ];
 
     // Constants for device status
@@ -103,6 +109,11 @@ class Device extends Model
         return $this->belongsTo(Land::class);
     }
 
+    public function mqttBroker(): BelongsTo
+    {
+        return $this->belongsTo(MqttBroker::class);
+    }
+
     // Query Scopes
     public function scopeEnabled(Builder $query): Builder
     {
@@ -124,6 +135,11 @@ class Device extends Model
     public function scopeByType(Builder $query, string $type): Builder
     {
         return $query->where('device_type', $type);
+    }
+
+    public function scopeWithMqttBroker(Builder $query): Builder
+    {
+        return $query->with('mqttBroker');
     }
 
     // Accessors & Mutators
@@ -167,6 +183,37 @@ class Device extends Model
             $this->wifi_rssi >= -80 => 'poor',
             default => 'very poor'
         };
+    }
+
+    // MQTT Accessors
+    public function getMqttClientIdAttribute(): string
+    {
+        $prefix = $this->mqttBroker?->client_id_prefix ?? 'laravel';
+        $suffix = $this->device_unique_id ?? $this->device_unique_id;
+        return $prefix . '_' . $suffix;
+    }
+
+    public function getMqttTopicsAttribute(): array
+    {
+        $deviceId = $this->device_unique_id;
+        $customTopics = $this->mqtt_topics_config ?? [];
+        
+        $defaultTopics = [
+            'discovery_request' => "devices/{$deviceId}/discover",
+            'discovery_response' => "devices/{$deviceId}/discovery/response",
+            'data' => "devices/{$deviceId}/data",
+            'status' => "devices/{$deviceId}/status",
+            'gps' => "devices/{$deviceId}/gps",
+            'commands' => "devices/{$deviceId}/commands",
+            'control_response' => "devices/{$deviceId}/control/response",
+        ];
+        
+        return array_merge($defaultTopics, $customTopics);
+    }
+
+    public function getEffectiveMqttBrokerAttribute(): ?MqttBroker
+    {
+        return $this->mqttBroker ?? MqttBroker::where('is_default', true)->first();
     }
 
     // Business Logic Methods
@@ -238,5 +285,126 @@ class Device extends Model
         return $this->health_percentage < 50 || 
                $this->status === self::STATUS_ERROR ||
                !$this->wifi_connected;
+    }
+
+    // MQTT Business Logic Methods
+    public function updateFromMqttData(array $mqttData): self
+    {
+        // Handle different types of MQTT messages
+        if (isset($mqttData['device_data'])) {
+            $this->updateFromApiData($mqttData);
+        }
+
+        // Handle GPS data
+        if (isset($mqttData['location'])) {
+            $this->updateLocationFromMqtt($mqttData['location']);
+        }
+
+        // Handle status updates
+        if (isset($mqttData['status'])) {
+            $this->status = $mqttData['status'];
+        }
+
+        // Update last seen timestamp
+        $this->last_seen_at = now();
+        
+        return $this;
+    }
+
+    public function updateLocationFromMqtt(array $locationData): void
+    {
+        $applicationData = $this->application_data ?? [];
+        
+        $applicationData['gps'] = [
+            'latitude' => $locationData['latitude'] ?? null,
+            'longitude' => $locationData['longitude'] ?? null,
+            'altitude' => $locationData['altitude'] ?? null,
+            'speed_kmh' => $locationData['speed_kmh'] ?? null,
+            'satellites' => $locationData['satellites'] ?? null,
+            'hdop' => $locationData['hdop'] ?? null,
+            'timestamp' => $locationData['timestamp'] ?? now()->toISOString(),
+            'updated_at' => now()->toISOString(),
+        ];
+        
+        $this->application_data = $applicationData;
+    }
+
+    public function publishMqttCommand(string $command, array $payload = []): bool
+    {
+        $broker = $this->effective_mqtt_broker;
+        if (!$broker) {
+            return false;
+        }
+
+        $topics = $this->mqtt_topics;
+        $commandTopic = $topics['commands'] ?? "devices/{$this->device_unique_id}/commands";
+        
+        $message = [
+            'command' => $command,
+            'payload' => $payload,
+            'timestamp' => now()->toISOString(),
+            'device_id' => $this->device_unique_id,
+        ];
+
+        // This would be handled by your MQTT service
+        // return app(MqttConnectionService::class)->publishToDevice($this, $commandTopic, $message);
+        
+        return true; // Placeholder
+    }
+
+    public function getLastGpsLocationAttribute(): ?array
+    {
+        $applicationData = $this->application_data ?? [];
+        return $applicationData['gps'] ?? null;
+    }
+
+    public function hasGpsData(): bool
+    {
+        $gps = $this->last_gps_location;
+        return $gps && isset($gps['latitude'], $gps['longitude']);
+    }
+
+    public function getGpsCoordinatesAttribute(): ?string
+    {
+        $gps = $this->last_gps_location;
+        if (!$gps || !isset($gps['latitude'], $gps['longitude'])) {
+            return null;
+        }
+        
+        return $gps['latitude'] . ',' . $gps['longitude'];
+    }
+
+    public function customizeMqttTopics(array $topicOverrides): void
+    {
+        $currentConfig = $this->mqtt_topics_config ?? [];
+        $this->mqtt_topics_config = array_merge($currentConfig, $topicOverrides);
+        $this->save();
+    }
+
+    public function resetMqttTopics(): void
+    {
+        $this->mqtt_topics_config = null;
+        $this->save();
+    }
+
+    public function assignToMqttBroker(MqttBroker $broker, string $clientIdSuffix = null): void
+    {
+        $this->mqtt_broker_id = $broker->id;
+        $this->device_unique_id = $clientIdSuffix ?? $this->device_unique_id;
+        $this->save();
+    }
+
+    public function getMqttConnectionConfigAttribute(): array
+    {
+        $broker = $this->effective_mqtt_broker;
+        if (!$broker) {
+            return [];
+        }
+
+        $config = $broker->getConnectionConfig();
+        $config['client_id'] = $this->mqtt_client_id;
+        $config['topics'] = $this->mqtt_topics;
+        
+        return $config;
     }
 }
