@@ -57,64 +57,53 @@ class ViewDevice extends ViewRecord
                             ->boolean(),
                     ])->columns(3),
 
-                // Device Health and Status
-                Infolists\Components\Section::make('Device Health & Status')
+                // MQTT Topics
+                Infolists\Components\Section::make('MQTT Topics')
                     ->schema([
-                        Infolists\Components\TextEntry::make('health_percentage')
-                            ->label('Health')
-                            ->suffix('%')
-                            ->badge()
-                            ->color(fn ($state): string => match (true) {
-                                $state >= 80 => 'success',
-                                $state >= 60 => 'warning',
-                                default => 'danger',
-                            }),
-                        Infolists\Components\TextEntry::make('last_seen_at')
-                            ->label('Last Seen')
-                            ->dateTime()
-                            ->since(),
-                        Infolists\Components\TextEntry::make('firmware_version')
-                            ->label('Firmware Version')
-                            ->placeholder('Not available'),
-                        Infolists\Components\TextEntry::make('mac_address')
-                            ->label('MAC Address')
-                            ->copyable()
-                            ->placeholder('Not available'),
-                        Infolists\Components\TextEntry::make('wifi_rssi')
-                            ->label('WiFi Signal')
-                            ->suffix(' dBm')
-                            ->badge()
-                            ->color(fn ($state): string => match (true) {
-                                $state >= -50 => 'success',
-                                $state >= -70 => 'warning',
-                                default => 'danger',
-                            }),
-                    ])->columns(3),
-
-                // MQTT Configuration
-                Infolists\Components\Section::make('MQTT Configuration')
-                    ->schema([
-                        Infolists\Components\TextEntry::make('api_url')
-                            ->label('Topic Prefix')
-                            ->placeholder('devices/{device_id}'),
-                        Infolists\Components\TextEntry::make('created_at')
-                            ->label('Registered At')
-                            ->dateTime(),
-                        Infolists\Components\TextEntry::make('updated_at')
-                            ->label('Last Updated')
-                            ->dateTime()
-                            ->since(),
-                    ])->columns(3),
+                        Infolists\Components\TextEntry::make('mqtt_topics_config.discovery_request')
+                            ->label('Discovery Request Topic')
+                            ->placeholder('devices/{device_id}/discover')
+                            ->copyable(),
+                        Infolists\Components\TextEntry::make('mqtt_topics_config.discovery_response')
+                            ->label('Discovery Response Topic')
+                            ->placeholder('devices/{device_id}/discovery/response')
+                            ->copyable(),
+                        Infolists\Components\TextEntry::make('mqtt_topics_config.data')
+                            ->label('Data Topic')
+                            ->placeholder('devices/{device_id}/data')
+                            ->copyable(),
+                        Infolists\Components\TextEntry::make('mqtt_topics_config.status')
+                            ->label('Status Topic')
+                            ->placeholder('devices/{device_id}/status')
+                            ->copyable(),
+                        Infolists\Components\TextEntry::make('mqtt_topics_config.gps')
+                            ->label('GPS Topic')
+                            ->placeholder('devices/{device_id}/gps')
+                            ->copyable(),
+                        Infolists\Components\TextEntry::make('mqtt_topics_config.commands')
+                            ->label('Commands Topic')
+                            ->placeholder('devices/{device_id}/commands')
+                            ->copyable(),
+                        Infolists\Components\TextEntry::make('mqtt_topics_config.control_response')
+                            ->label('Control Response Topic')
+                            ->placeholder('devices/{device_id}/control/response')
+                            ->copyable(),
+                        Infolists\Components\TextEntry::make('mqtt_topics_config.global_discovery')
+                            ->label('Global Discovery Topic')
+                            ->placeholder('devices/discover/all')
+                            ->copyable(),
+                    ])
+                    ->columns(2)
+                    ->collapsible(),
 
                 // Sensors Information
-               Infolists\Components\Section::make('Connected Sensors')
-                    ->extraAttributes(['wire:poll.5s' => '']) // Keep your 5-second polling
+                Infolists\Components\Section::make('Connected Sensors')
+                    ->extraAttributes(['wire:poll.5s' => ''])
                     ->schema([
                         Infolists\Components\ViewEntry::make('sensors')
                             ->view('filament.infolists.sensors-table')
                             ->columnSpanFull(),
                     ]),
-
 
                 // Device Notes
                 Infolists\Components\Section::make('Additional Information')
@@ -127,6 +116,7 @@ class ViewDevice extends ViewRecord
                     ->collapsible(),
             ]);
     }
+
 
     protected function getHeaderActions(): array
     {

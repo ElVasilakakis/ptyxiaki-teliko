@@ -300,25 +300,32 @@ class MqttBrokerResource extends Resource
                     ->label('Test Connection')
                     ->icon('heroicon-o-signal')
                     ->action(function (MqttBroker $record) {
+                        $maxTestTime = 10; // seconds
+                        $startTime = time();
+                        
                         try {
-                            // Test connection logic would go here
+                            // Call the static method correctly
+                            self::testConnectionWithTimeout($record, $maxTestTime);
+                            
                             $record->updateConnectionStatus(true);
                             
                             Notification::make()
                                 ->title('Connection Test Successful')
-                                ->body("Successfully connected to {$record->name}")
+                                ->body("Connected to {$record->name} in " . (time() - $startTime) . " seconds")
                                 ->success()
                                 ->send();
+                                
                         } catch (\Exception $e) {
                             $record->updateConnectionStatus(false, $e->getMessage());
                             
                             Notification::make()
                                 ->title('Connection Test Failed')
-                                ->body('Error: ' . $e->getMessage())
+                                ->body("Error: " . $e->getMessage())
                                 ->danger()
                                 ->send();
                         }
                     }),
+
                 Tables\Actions\Action::make('set_default')
                     ->label('Set as Default')
                     ->icon('heroicon-o-star')
@@ -463,4 +470,25 @@ class MqttBrokerResource extends Resource
     {
         return static::getModel()::active()->count() > 0 ? 'success' : 'danger';
     }
+
+    private static function testConnectionWithTimeout(MqttBroker $broker, int $timeout): void
+    {
+        $connectionSettings = new \PhpMqtt\Client\ConnectionSettings();
+        
+        if ($broker->username) {
+            $connectionSettings->setUsername($broker->username);
+            $connectionSettings->setPassword($broker->password);
+        }
+        
+        $connectionSettings->setKeepAliveInterval($broker->keep_alive);
+        $connectionSettings->setConnectTimeout(min($timeout, $broker->connect_timeout));
+        $connectionSettings->setUseTls($broker->tls_enabled);
+        
+        $clientId = $broker->generateClientId('filament_test_' . uniqid());
+        $mqtt = new \PhpMqtt\Client\MqttClient($broker->host, $broker->port, $clientId);
+        
+        $mqtt->connect($connectionSettings, $broker->clean_session);
+        $mqtt->disconnect();
+    }
+
 }
