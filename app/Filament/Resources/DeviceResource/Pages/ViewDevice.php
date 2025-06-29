@@ -109,16 +109,19 @@ Infolists\Components\ViewEntry::make('location_map')
         // Check multiple possible sources for device location
         $deviceLat = null;
         $deviceLng = null;
+        $locationFound = false;
         
-        // Try direct model attributes first
-        if ($device->latitude && $device->longitude) {
-            $deviceLat = (float)$device->latitude;
-            $deviceLng = (float)$device->longitude;
+        // Method 1: Check GPS data from application_data (MQTT GPS data)
+        if ($device->hasGpsData()) {
+            $gpsData = $device->last_gps_location;
+            $deviceLat = (float)$gpsData['latitude'];
+            $deviceLng = (float)$gpsData['longitude'];
+            $locationFound = true;
         }
-        // Try sensor data if direct attributes don't exist
+        // Method 2: Check sensors with GPS/LOCATION type
         elseif ($device->sensors && $device->sensors->isNotEmpty()) {
             foreach ($device->sensors as $sensor) {
-                if ($sensor->sensor_type === 'GPS' || $sensor->sensor_type === 'LOCATION') {
+                if (in_array($sensor->sensor_type, ['GPS', 'LOCATION'])) {
                     $latestReading = $sensor->sensorReadings()
                         ->latest()
                         ->first();
@@ -128,27 +131,30 @@ Infolists\Components\ViewEntry::make('location_map')
                             ? json_decode($latestReading->sensor_data, true) 
                             : $latestReading->sensor_data;
                         
-                        if (isset($sensorData['latitude']) && isset($sensorData['longitude'])) {
+                        if (isset($sensorData['latitude']) && isset($sensorData['longitude']) &&
+                            $sensorData['latitude'] !== null && $sensorData['longitude'] !== null) {
                             $deviceLat = (float)$sensorData['latitude'];
                             $deviceLng = (float)$sensorData['longitude'];
+                            $locationFound = true;
                             break;
                         }
                         // Also check for 'lat' and 'lng' keys
-                        elseif (isset($sensorData['lat']) && isset($sensorData['lng'])) {
+                        elseif (isset($sensorData['lat']) && isset($sensorData['lng']) &&
+                                $sensorData['lat'] !== null && $sensorData['lng'] !== null) {
                             $deviceLat = (float)$sensorData['lat'];
                             $deviceLng = (float)$sensorData['lng'];
+                            $locationFound = true;
                             break;
                         }
                     }
                 }
             }
         }
-        // Try the latest sensor reading with GPS data
-        elseif ($device->sensorReadings && $device->sensorReadings->isNotEmpty()) {
+        // Method 3: Check sensor readings directly (if device doesn't have sensors relation loaded)
+        if (!$locationFound && method_exists($device, 'sensorReadings')) {
             $latestReading = $device->sensorReadings()
                 ->whereHas('sensor', function($query) {
-                    $query->where('sensor_type', 'GPS')
-                          ->orWhere('sensor_type', 'LOCATION');
+                    $query->whereIn('sensor_type', ['GPS', 'LOCATION']);
                 })
                 ->latest()
                 ->first();
@@ -158,15 +164,30 @@ Infolists\Components\ViewEntry::make('location_map')
                     ? json_decode($latestReading->sensor_data, true) 
                     : $latestReading->sensor_data;
                 
-                if (isset($sensorData['latitude']) && isset($sensorData['longitude'])) {
+                if (isset($sensorData['latitude']) && isset($sensorData['longitude']) &&
+                    $sensorData['latitude'] !== null && $sensorData['longitude'] !== null) {
                     $deviceLat = (float)$sensorData['latitude'];
                     $deviceLng = (float)$sensorData['longitude'];
+                    $locationFound = true;
+                }
+                elseif (isset($sensorData['lat']) && isset($sensorData['lng']) &&
+                        $sensorData['lat'] !== null && $sensorData['lng'] !== null) {
+                    $deviceLat = (float)$sensorData['lat'];
+                    $deviceLng = (float)$sensorData['lng'];
+                    $locationFound = true;
                 }
             }
         }
         
-        // Add device to collection if we found coordinates
-        if ($deviceLat && $deviceLng) {
+        // Add device to collection if location found
+        if ($locationFound) {
+            // Get altitude from GPS data if available
+            $altitude = null;
+            if ($device->hasGpsData()) {
+                $gpsData = $device->last_gps_location;
+                $altitude = $gpsData['altitude'] ?? null;
+            }
+            
             $devices->push([
                 'id' => $device->id,
                 'name' => $device->name,
@@ -174,12 +195,16 @@ Infolists\Components\ViewEntry::make('location_map')
                 'lng' => $deviceLng,
                 'type' => $device->device_type,
                 'status' => $device->status,
-                'altitude' => $device->altitude ?? null,
+                'altitude' => $altitude,
             ]);
         }
         
-        // Associated land location (unchanged)
-        if ($device->land && $device->land->latitude && $device->land->longitude) {
+        // Check for land location
+        $landLocationExists = false;
+        if ($device->land && 
+            isset($device->land->latitude) && isset($device->land->longitude) &&
+            $device->land->latitude !== null && $device->land->longitude !== null) {
+            
             $lands->push([
                 'id' => $device->land->id,
                 'name' => $device->land->land_name,
@@ -188,6 +213,7 @@ Infolists\Components\ViewEntry::make('location_map')
                 'boundary' => $device->land->boundary_coordinates ?? null,
                 'area' => $device->land->area ?? null,
             ]);
+            $landLocationExists = true;
         }
         
         // Determine center coordinates
@@ -199,12 +225,14 @@ Infolists\Components\ViewEntry::make('location_map')
             'lands' => $lands,
             'center_lat' => $centerLat,
             'center_lng' => $centerLng,
-            'has_location' => ($deviceLat && $deviceLng) || 
-                            ($device->land && $device->land->latitude && $device->land->longitude),
+            'has_location' => $locationFound || $landLocationExists,
+            'device_has_location' => $locationFound,
+            'land_has_location' => $landLocationExists,
             'mapId' => 'device-map-' . $device->id,
         ];
     })
     ->columnSpanFull(),
+
 
 
                 // MQTT Topics
