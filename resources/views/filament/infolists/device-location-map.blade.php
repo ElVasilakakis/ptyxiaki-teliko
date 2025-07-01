@@ -67,9 +67,11 @@
             // Initialize map
             const map = L.map(mapId).setView([centerLat, centerLng], 15);
             
-            // Add tile layer
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors'
+            // Use CartoDB tile layer (more reliable than OpenStreetMap)
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '© OpenStreetMap contributors © CARTO',
+                subdomains: 'abcd',
+                maxZoom: 19
             }).addTo(map);
             
             // Device icons and colors
